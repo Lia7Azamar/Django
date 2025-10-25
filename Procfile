@@ -1,2 +1,1 @@
-# Procfile
-web: gunicorn malware_project.wsgi:application --log-file -
+web: gunicorn yango.wsgi:application --log-file -
