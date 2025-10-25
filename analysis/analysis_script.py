@@ -29,8 +29,9 @@ CSV_FILENAME = 'TotalFeatures-ISCXFlowMeter.csv'
 BASE_RESOURCE_URL = "https://huggingface.co/datasets/Lia896gh/csv/resolve/main/" 
 
 # COLUMNAS ESENCIALES PARA EL ANÁLISIS/GRÁFICAS
+# **CORRECCIÓN CLAVE: Usamos 'calss' (el nombre real en el CSV) para usecols.**
 COLUMNS_NEEDED = [
-    'Class', 'calss', 'duration', 'total_fpackets', 'total_bpktl', 
+    'calss', 'duration', 'total_fpackets', 'total_bpktl', 
     'min_fpktl', 'mean_fiat', 'flowPktsPerSecond', 'min_active', 
     'mean_active', 'Init_Win_bytes_forward', 'min_flowpktl', 'flow_fin'
 ]
@@ -65,8 +66,7 @@ def load_file_from_url_stream(filename):
 
 def initialize_global_resources():
     """
-    Carga todos los recursos de ML globalmente. Esta función es llamada 
-    una sola vez por el proceso maestro de Gunicorn usando --preload.
+    Carga todos los recursos de ML globalmente.
     """
     global GLOBAL_DF, GLOBAL_MODEL_F1, GLOBAL_MODEL_REG, GLOBAL_MODEL_CLAS, GLOBAL_LE_CLAS, RESOURCES_LOADED
 
@@ -76,7 +76,7 @@ def initialize_global_resources():
     try:
         # 1. Carga del DataFrame - CON STREAMING, NROWS Y USECOLS
         
-        N_ROWS_TO_LOAD = 200 # **MÁXIMO AHORRO DE RAM**
+        N_ROWS_TO_LOAD = 200 # MÁXIMO AHORRO DE RAM
         print(f"Cargando las primeras {N_ROWS_TO_LOAD} filas y columnas específicas del CSV.")
         
         csv_stream = load_file_from_url_stream(CSV_FILENAME)
@@ -84,11 +84,12 @@ def initialize_global_resources():
         df_temp = pd.read_csv(
             csv_stream, 
             nrows=N_ROWS_TO_LOAD,
-            usecols=COLUMNS_NEEDED # Solo carga las columnas necesarias
+            usecols=COLUMNS_NEEDED 
         ) 
         
-        # Preprocesamiento inicial 
+        # Preprocesamiento inicial
         df_temp.columns = df_temp.columns.str.strip()
+        # Esta línea renombra la columna 'calss' a 'Class' para el resto del script
         df_temp.columns = [col.replace("calss", "Class") for col in df_temp.columns] 
         for col in df_temp.columns:
             if col not in ['Class', 'calss']:
@@ -130,16 +131,13 @@ def generar_grafica_base64(fig):
 
 
 # -------------------------------------------------------------------------
-# FUNCIÓN DE EJECUCIÓN (Mantiene la lógica original)
+# FUNCIÓN DE EJECUCIÓN 
 # -------------------------------------------------------------------------
 
 def run_malware_analysis():
     """Usa los modelos y datos cargados globalmente y genera resultados."""
     
-    # 1. Ya NO llamamos a initialize_global_resources() aquí, pues se hace en wsgi.py
-    # La validación se hace directamente sobre la variable global
-    
-    # 2. Comprobación de recursos globales
+    # Comprobación de recursos globales
     if not RESOURCES_LOADED or GLOBAL_DF is None:
         return { 
             'error': "ERROR: Recursos de ML no cargados. El servidor falló en la inicialización.", 
@@ -147,20 +145,18 @@ def run_malware_analysis():
             'dataframe': [] 
         }
 
-    # Usar los recursos globales (resto del código es el mismo)
+    # Usar los recursos globales
     df_safe = GLOBAL_DF.copy()
     model_f1 = GLOBAL_MODEL_F1
     model_reg = GLOBAL_MODEL_REG
     model_clas = GLOBAL_MODEL_CLAS
     le_clas = GLOBAL_LE_CLAS
 
-    # ... (El resto del código de análisis, gráficas, y métricas es el mismo) ...
-
-    # 2. Preprocesamiento de datos (solo de variables globales)
+    # 2. Preprocesamiento de datos 
     target_col_cls = 'Class' if 'Class' in df_safe.columns else 'calss'
     features_cls_all = ['duration', 'total_fpackets', 'total_bpktl', 'min_fpktl', 'mean_fiat', 'flowPktsPerSecond', 'min_active', 'mean_active', 'Init_Win_bytes_forward']
     
-    # Muestreo para evitar OOM si el DataFrame de 200 filas sigue siendo grande
+    # Muestreo para evitar OOM 
     df_sample = df_safe.sample(frac=0.8, random_state=42) 
     class_counts = df_safe[target_col_cls].value_counts()
 
