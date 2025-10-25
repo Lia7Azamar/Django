@@ -11,7 +11,7 @@ import io
 import base64
 import matplotlib
 import joblib 
-import requests # Nuevo: para descargar archivos desde URL
+import requests 
 from django.conf import settings 
 
 # CORRECCIÓN: Usar backend no interactivo para servidores
@@ -26,8 +26,8 @@ LE_CLAS_FILENAME = 'le_clas.joblib'
 CSV_FILENAME = 'TotalFeatures-ISCXFlowMeter.csv'
 
 # ** ¡IMPORTANTE! REEMPLAZA ESTA URL CON TU REPOSITORIO DE HUGGING FACE **
-# Debe terminar en 'resolve/main/'
-BASE_RESOURCE_URL = "https://huggingface.co/datasets/Lia896gh/csv/resolve/main/"
+# Debe terminar en 'resolve/main/' y tener una barra al final.
+BASE_RESOURCE_URL = "https://huggingface.co/datasets/Lia896gh/csv/resolve/main/" 
 
 # Inicializar variables globales
 GLOBAL_DF = None
@@ -56,16 +56,25 @@ def load_file_from_url(filename):
 def initialize_global_resources():
     """
     Carga todos los recursos de ML desde URLs de Hugging Face directamente a la memoria.
+    **Implementa limitación de filas para ahorrar memoria.**
     """
     global GLOBAL_DF, GLOBAL_MODEL_F1, GLOBAL_MODEL_REG, GLOBAL_MODEL_CLAS, GLOBAL_LE_CLAS, RESOURCES_LOADED
 
     if RESOURCES_LOADED:
-        return # Ya cargado, salir
+        return 
 
     try:
-        # 1. Carga del DataFrame
+        # 1. Carga del DataFrame - CON LÍMITE DE MEMORIA
         csv_bytes = load_file_from_url(CSV_FILENAME)
-        df_temp = pd.read_csv(io.BytesIO(csv_bytes))
+        
+        # **CAMBIO CLAVE: Cargar solo las primeras N filas para evitar OOM (Out Of Memory)**
+        N_ROWS_TO_LOAD = 10000 
+        print(f"Cargando las primeras {N_ROWS_TO_LOAD} filas del CSV para ahorrar RAM.")
+        
+        df_temp = pd.read_csv(
+            io.BytesIO(csv_bytes), 
+            nrows=N_ROWS_TO_LOAD 
+        ) 
         
         # Preprocesamiento inicial (Tu lógica original)
         df_temp.columns = df_temp.columns.str.strip()
@@ -74,9 +83,9 @@ def initialize_global_resources():
             if col not in ['Class', 'calss']:
                 df_temp[col] = pd.to_numeric(df_temp[col], errors='coerce') 
         df_temp.replace([np.inf, -np.inf, np.nan], 0, inplace=True)
-        GLOBAL_DF = df_temp
+        GLOBAL_DF = df_temp.copy()
         
-        # 2. Carga de Modelos (directamente desde bytes en memoria)
+        # 2. Carga de Modelos (deben ser más pequeños y no causar OOM)
         
         f1_bytes = load_file_from_url(MODEL_F1_FILENAME)
         GLOBAL_MODEL_F1 = joblib.load(io.BytesIO(f1_bytes))
@@ -138,7 +147,10 @@ def run_malware_analysis():
     # 2. Preprocesamiento de datos (solo de variables globales)
     target_col_cls = 'Class' if 'Class' in df_safe.columns else 'calss'
     features_cls_all = ['duration', 'total_fpackets', 'total_bpktl', 'min_fpktl', 'mean_fiat', 'flowPktsPerSecond', 'min_active', 'mean_active', 'Init_Win_bytes_forward']
-    df_sample = df_safe.sample(frac=0.1, random_state=42)
+    
+    # Muestreo para evitar OOM si el DataFrame de 10k filas sigue siendo grande
+    # Usar una muestra de la muestra.
+    df_sample = df_safe.sample(frac=0.8, random_state=42) 
     class_counts = df_safe[target_col_cls].value_counts()
 
 
@@ -178,6 +190,10 @@ def run_malware_analysis():
     xx, yy = np.meshgrid(np.linspace(x_min, x_max, 200), np.linspace(y_min, y_max, 200))
     feature_names = X_clas_filt.columns
     grid_data_svc = pd.DataFrame(np.c_[xx.ravel(), yy.ravel()], columns=feature_names) 
+    
+    # Asegurarse de que el modelo no reciba NaN o Infinito si la muestra es extraña
+    grid_data_svc.replace([np.inf, -np.inf, np.nan], 0, inplace=True) 
+
     Z = model_clas.predict(grid_data_svc) 
     Z = Z.reshape(xx.shape)
     
@@ -202,7 +218,7 @@ def run_malware_analysis():
     y_reg_original.replace([np.inf, -np.inf, np.nan], 0, inplace=True) 
     y_reg_transformed = np.log1p(y_reg_original)
     X_reg = df_sample.drop(['Init_Win_bytes_forward', target_col_cls], axis=1, errors='ignore')
-    X_reg.replace([np.inf, -np.inf], 0, inplace=True) 
+    X_reg.replace([np.inf, -np.inf, np.nan], 0, inplace=True) 
     
     feature_importances = pd.Series(model_reg.feature_importances_, index=X_reg.columns)
     top_2_features = feature_importances.nlargest(2).index.tolist()
@@ -210,7 +226,7 @@ def run_malware_analysis():
         top_2_features = X_reg.columns[:2].tolist()
 
     X_reg_top = X_reg[top_2_features]
-    X_reg_top.replace([np.inf, -np.inf], 0, inplace=True)
+    X_reg_top.replace([np.inf, -np.inf, np.nan], 0, inplace=True)
     
     X_train_reg, X_test_reg, y_train_reg_transf, y_test_reg_transf = train_test_split(
         X_reg_top, y_reg_transformed, test_size=0.3, random_state=42
@@ -265,13 +281,10 @@ def run_malware_analysis():
 def train_and_save_models(df_safe):
     """Entrena y guarda los modelos necesarios para la aplicación (solo localmente)."""
     # Esta función está vacía o contiene tu lógica de entrenamiento.
-    # No se usa en Railway, pero se mantiene para la estructura.
     pass
 
 
-# Si ejecutas este archivo directamente, entrenas y guardas los modelos
 if __name__ == '__main__':
     # Esta sección es solo para pruebas de desarrollo LOCAL
-    # y ya no es la principal ruta para cargar datos en Railway.
-    print("Ejecutando script localmente. La carga de datos en Railway usará Hugging Face.")
+    print("Ejecutando script localmente.")
     pass
