@@ -27,7 +27,7 @@ CSV_FILENAME = 'TotalFeatures-ISCXFlowMeter.csv'
 
 # ** ¡IMPORTANTE! REEMPLAZA ESTA URL CON TU REPOSITORIO DE HUGGING FACE **
 # Debe terminar en 'resolve/main/'
-BASE_RESOURCE_URL = "https://huggingface.co/datasets/Lia896gh/csv/tree/main" 
+BASE_RESOURCE_URL = "https://huggingface.co/datasets/Lia896gh/csv/resolve/main/"
 
 # Inicializar variables globales
 GLOBAL_DF = None
