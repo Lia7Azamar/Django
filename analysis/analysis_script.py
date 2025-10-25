@@ -2,7 +2,8 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import f1_score
 from sklearn.preprocessing import StandardScaler, LabelEncoder
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+# No necesitamos importar los modelos si solo los cargamos, pero se mantienen por claridad
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor 
 from sklearn.svm import SVC
 import numpy as np
 import os
@@ -29,7 +30,7 @@ CSV_FILENAME = 'TotalFeatures-ISCXFlowMeter.csv'
 BASE_RESOURCE_URL = "https://huggingface.co/datasets/Lia896gh/csv/resolve/main/" 
 
 # COLUMNAS ESENCIALES PARA EL ANÁLISIS/GRÁFICAS
-# **CORRECCIÓN CLAVE: Usamos 'calss' (el nombre real en el CSV) para usecols.**
+# Se usa 'calss' para que la carga inicial no falle. Luego se renombra.
 COLUMNS_NEEDED = [
     'calss', 'duration', 'total_fpackets', 'total_bpktl', 
     'min_fpktl', 'mean_fiat', 'flowPktsPerSecond', 'min_active', 
@@ -45,7 +46,7 @@ GLOBAL_LE_CLAS = None
 RESOURCES_LOADED = False
 
 # --------------------------------------------------------------------
-# *** FUNCIONES DE CARGA OPTIMIZADAS ***
+# *** FUNCIONES DE CARGA OPTIMIZADAS (No se necesitan cambios aquí) ***
 # --------------------------------------------------------------------
 
 def load_file_from_url(filename):
@@ -74,9 +75,8 @@ def initialize_global_resources():
         return 
 
     try:
-        # 1. Carga del DataFrame - CON STREAMING, NROWS Y USECOLS
-        
-        N_ROWS_TO_LOAD = 200 # MÁXIMO AHORRO DE RAM
+        # 1. Carga del DataFrame - MÁXIMO AHORRO DE RAM
+        N_ROWS_TO_LOAD = 200 
         print(f"Cargando las primeras {N_ROWS_TO_LOAD} filas y columnas específicas del CSV.")
         
         csv_stream = load_file_from_url_stream(CSV_FILENAME)
@@ -89,7 +89,6 @@ def initialize_global_resources():
         
         # Preprocesamiento inicial
         df_temp.columns = df_temp.columns.str.strip()
-        # Esta línea renombra la columna 'calss' a 'Class' para el resto del script
         df_temp.columns = [col.replace("calss", "Class") for col in df_temp.columns] 
         for col in df_temp.columns:
             if col not in ['Class', 'calss']:
@@ -119,7 +118,7 @@ def initialize_global_resources():
         print(f"ERROR FATAL: Fallo al procesar recursos (joblib/csv) debido a: {e}")
     
 
-# Función auxiliar para convertir gráficas a base64
+# Función auxiliar para convertir gráficas a base64 (Se mantiene igual)
 def generar_grafica_base64(fig):
     """Convierte un objeto Matplotlib figure a una cadena base64."""
     buf = io.BytesIO()
@@ -131,7 +130,7 @@ def generar_grafica_base64(fig):
 
 
 # -------------------------------------------------------------------------
-# FUNCIÓN DE EJECUCIÓN 
+# FUNCIÓN DE EJECUCIÓN (Se mantiene igual, usa los modelos globales)
 # -------------------------------------------------------------------------
 
 def run_malware_analysis():
@@ -170,7 +169,7 @@ def run_malware_analysis():
     df_filtered_cls_f1['target_binary'] = df_filtered_cls_f1[target_col_cls].map(class_map)
     y_cls_f1 = df_filtered_cls_f1['target_binary']
     X_cls_f1 = df_filtered_cls_f1[features_cls_all].copy()
-    X_cls_f1.replace([np.inf, -np.inf], 0, inplace=True)
+    X_cls_f1.replace([np.inf, -np.inf, np.nan], 0, inplace=True)
     X_train_f1, X_test_f1, y_train_f1, y_test_f1 = train_test_split(X_cls_f1, y_cls_f1, test_size=0.4, random_state=42)
     
     # Crear y usar el Scaler
@@ -279,14 +278,6 @@ def run_malware_analysis():
         'grafica3_b64': grafica3_b64, 
         'regressionData': regression_data_surface
     }
-
-# -------------------------------------------------------------------------
-# FUNCIÓN DE ENTRENAMIENTO Y GUARDADO (EJECUCIÓN LOCAL SOLAMENTE)
-# -------------------------------------------------------------------------
-
-def train_and_save_models(df_safe):
-    """Entrena y guarda los modelos necesarios para la aplicación (solo localmente)."""
-    pass
 
 
 if __name__ == '__main__':
