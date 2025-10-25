@@ -11,6 +11,7 @@ import io
 import base64
 import matplotlib
 import joblib 
+import requests # Nuevo: para descargar archivos desde URL
 from django.conf import settings 
 
 # CORRECCIÓN: Usar backend no interactivo para servidores
@@ -24,6 +25,10 @@ MODEL_SVM_FILENAME = 'model_svm.joblib'
 LE_CLAS_FILENAME = 'le_clas.joblib'
 CSV_FILENAME = 'TotalFeatures-ISCXFlowMeter.csv'
 
+# ** ¡IMPORTANTE! REEMPLAZA ESTA URL CON TU REPOSITORIO DE HUGGING FACE **
+# Debe terminar en 'resolve/main/'
+BASE_RESOURCE_URL = "https://huggingface.co/datasets/Lia896gh/csv/tree/main" 
+
 # Inicializar variables globales
 GLOBAL_DF = None
 GLOBAL_MODEL_F1 = None
@@ -35,13 +40,22 @@ GLOBAL_LE_CLAS = None
 RESOURCES_LOADED = False
 
 # --------------------------------------------------------------------
-# *** NUEVA FUNCIÓN DE INICIALIZACIÓN DE RECURSOS ***
+# *** NUEVAS FUNCIONES PARA CARGA DESDE URL (HUGGING FACE) ***
 # --------------------------------------------------------------------
+
+def load_file_from_url(filename):
+    """Descarga un archivo (CSV o joblib) desde la URL y lo devuelve como bytes."""
+    url = f"{BASE_RESOURCE_URL}{filename}"
+    print(f"Intentando cargar recurso desde: {url}")
+    # Usamos un timeout por si el archivo es grande
+    response = requests.get(url, timeout=60) 
+    response.raise_for_status() # Lanza un error si el código no es 200 (éxito)
+    return response.content
+
 
 def initialize_global_resources():
     """
-    Define rutas y carga todos los recursos de ML.
-    Solo accede a settings.BASE_DIR DENTRO de esta función.
+    Carga todos los recursos de ML desde URLs de Hugging Face directamente a la memoria.
     """
     global GLOBAL_DF, GLOBAL_MODEL_F1, GLOBAL_MODEL_REG, GLOBAL_MODEL_CLAS, GLOBAL_LE_CLAS, RESOURCES_LOADED
 
@@ -49,20 +63,11 @@ def initialize_global_resources():
         return # Ya cargado, salir
 
     try:
-        # --- RUTAS FINALES: Acceso a settings.BASE_DIR de forma segura ---
-        # El acceso está contenido en esta función, fuera del módulo global.
-        RESOURCES_DIR = os.path.join(settings.BASE_DIR, 'analysis')
-
-        CSV_FILE_PATH = os.path.join(RESOURCES_DIR, CSV_FILENAME)
-        MODEL_F1_PATH = os.path.join(RESOURCES_DIR, MODEL_F1_FILENAME)
-        MODEL_REG_PATH = os.path.join(RESOURCES_DIR, MODEL_REG_FILENAME)
-        MODEL_SVM_PATH = os.path.join(RESOURCES_DIR, MODEL_SVM_FILENAME)
-        LE_CLAS_PATH = os.path.join(RESOURCES_DIR, LE_CLAS_FILENAME)
-
-        # Carga del DataFrame
-        df_temp = pd.read_csv(CSV_FILE_PATH)
+        # 1. Carga del DataFrame
+        csv_bytes = load_file_from_url(CSV_FILENAME)
+        df_temp = pd.read_csv(io.BytesIO(csv_bytes))
         
-        # Preprocesamiento inicial
+        # Preprocesamiento inicial (Tu lógica original)
         df_temp.columns = df_temp.columns.str.strip()
         df_temp.columns = [col.replace("calss", "Class") for col in df_temp.columns] 
         for col in df_temp.columns:
@@ -71,19 +76,27 @@ def initialize_global_resources():
         df_temp.replace([np.inf, -np.inf, np.nan], 0, inplace=True)
         GLOBAL_DF = df_temp
         
-        # Carga de Modelos
-        GLOBAL_MODEL_F1 = joblib.load(MODEL_F1_PATH)
-        GLOBAL_MODEL_REG = joblib.load(MODEL_REG_PATH)
-        GLOBAL_MODEL_CLAS = joblib.load(MODEL_SVM_PATH)
-        GLOBAL_LE_CLAS = joblib.load(LE_CLAS_PATH)
+        # 2. Carga de Modelos (directamente desde bytes en memoria)
+        
+        f1_bytes = load_file_from_url(MODEL_F1_FILENAME)
+        GLOBAL_MODEL_F1 = joblib.load(io.BytesIO(f1_bytes))
+        
+        reg_bytes = load_file_from_url(MODEL_REG_FILENAME)
+        GLOBAL_MODEL_REG = joblib.load(io.BytesIO(reg_bytes))
+        
+        svm_bytes = load_file_from_url(MODEL_SVM_FILENAME)
+        GLOBAL_MODEL_CLAS = joblib.load(io.BytesIO(svm_bytes))
+        
+        le_bytes = load_file_from_url(LE_CLAS_FILENAME)
+        GLOBAL_LE_CLAS = joblib.load(io.BytesIO(le_bytes))
         
         RESOURCES_LOADED = True
-        print("Recursos de ML cargados exitosamente de forma global.")
+        print("Recursos de ML cargados exitosamente desde Hugging Face.")
 
-    except FileNotFoundError:
-        print(f"ERROR FATAL: Archivos de ML no encontrados. Verifique la carpeta: {RESOURCES_DIR}")
+    except requests.exceptions.RequestException as e:
+        print(f"ERROR FATAL: Fallo de red al cargar recursos desde la URL. ¿Es la URL correcta y el archivo público? Error: {e}")
     except Exception as e:
-        print(f"ERROR FATAL: Fallo al cargar recursos debido a: {e}")
+        print(f"ERROR FATAL: Fallo al procesar recursos (joblib/csv) debido a: {e}")
     
 
 # Función auxiliar para convertir gráficas a base64
@@ -105,13 +118,12 @@ def run_malware_analysis():
     """Usa los modelos y datos cargados globalmente y genera resultados."""
     
     # 1. Inicialización de recursos al comienzo de la función
-    # Esto asegura que settings.BASE_DIR se lea cuando Django está listo.
     initialize_global_resources() 
 
     # 2. Comprobación de recursos globales
     if not RESOURCES_LOADED:
         return { 
-            'error': "ERROR: Recursos de ML no cargados. Verifique las rutas de los archivos.", 
+            'error': "ERROR: Recursos de ML no cargados. Verifique las URLs de los archivos.", 
             'accuracy': 0.0, 
             'dataframe': [] 
         }
@@ -123,8 +135,6 @@ def run_malware_analysis():
     model_clas = GLOBAL_MODEL_CLAS
     le_clas = GLOBAL_LE_CLAS
 
-    # ... (El resto del código de run_malware_analysis sigue igual) ...
-    
     # 2. Preprocesamiento de datos (solo de variables globales)
     target_col_cls = 'Class' if 'Class' in df_safe.columns else 'calss'
     features_cls_all = ['duration', 'total_fpackets', 'total_bpktl', 'min_fpktl', 'mean_fiat', 'flowPktsPerSecond', 'min_active', 'mean_active', 'Init_Win_bytes_forward']
@@ -253,31 +263,15 @@ def run_malware_analysis():
 # -------------------------------------------------------------------------
 
 def train_and_save_models(df_safe):
-    """Entrena y guarda los modelos necesarios para la aplicación."""
-    # ... (Asegúrate de que este código use os.path.join(os.getcwd(), 'nombre_archivo.joblib')
-    # si se ejecuta localmente y quieres guardar en el directorio actual) ...
-    
-    # Ejemplo de guardado:
-    joblib.dump(model_f1, MODEL_F1_FILENAME)
-    print(f"Modelo F1 guardado en {MODEL_F1_FILENAME}")
-    
-    # ... (resto de train_and_save_models) ...
+    """Entrena y guarda los modelos necesarios para la aplicación (solo localmente)."""
+    # Esta función está vacía o contiene tu lógica de entrenamiento.
+    # No se usa en Railway, pero se mantiene para la estructura.
+    pass
 
 
 # Si ejecutas este archivo directamente, entrenas y guardas los modelos
 if __name__ == '__main__':
-    # Carga de Datos inicial para el entrenamiento local
-    file_path = CSV_FILENAME # Path local, asume que se ejecuta desde la raíz o dentro de analysis
-    
-    # ... (El código de carga local es correcto) ...
-    df = pd.read_csv(file_path)
-    df.columns = df.columns.str.strip()
-    df.columns = [col.replace("calss", "Class") for col in df.columns] 
-    df_safe = df.copy()
-    
-    for col in df_safe.columns:
-        if col != 'Class' and col != 'calss':
-            df_safe[col] = pd.to_numeric(df_safe[col], errors='coerce') 
-    df_safe.replace([np.inf, -np.inf, np.nan], 0, inplace=True)
-    
-    train_and_save_models(df_safe)
+    # Esta sección es solo para pruebas de desarrollo LOCAL
+    # y ya no es la principal ruta para cargar datos en Railway.
+    print("Ejecutando script localmente. La carga de datos en Railway usará Hugging Face.")
+    pass
