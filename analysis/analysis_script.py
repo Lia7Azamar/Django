@@ -69,7 +69,7 @@ def run_malware_analysis():
     
     # *** CORRECCIÓN CRUCIAL: Usar settings.BASE_DIR para ruta absoluta ***
     # Esto garantiza que Python encuentre el archivo CSV descargado por Git LFS.
-    csv_file_path = os.path.join(settings.BASE_DIR, CSV_FILENAME)
+    csv_file_path = os.path.join(settings.BASE_DIR, 'analysis', CSV_FILENAME)
 
     try:
         df = pd.read_csv(csv_file_path)
@@ -105,7 +105,7 @@ def run_malware_analysis():
         le_clas = joblib.load(os.path.join(settings.BASE_DIR, LE_CLAS_FILENAME))
     except FileNotFoundError:
         # Devuelve la ruta donde se buscó el primer modelo para el debugging
-        debug_path = os.path.join(settings.BASE_DIR, MODEL_F1_FILENAME)
+        model_f1 = joblib.load(os.path.join(settings.BASE_DIR, 'analysis', MODEL_F1_FILENAME))
         return { 
             'error': f"Modelos ML no encontrados. Buscados en: {debug_path}", 
             'accuracy': 0.0, 
