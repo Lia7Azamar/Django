@@ -2,8 +2,7 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import f1_score
 from sklearn.preprocessing import StandardScaler, LabelEncoder
-# No necesitamos importar los modelos si solo los cargamos, pero se mantienen por claridad
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor 
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.svm import SVC
 import numpy as np
 import os
@@ -15,7 +14,7 @@ import joblib
 import requests 
 from django.conf import settings 
 
-# CORRECCIÓN: Usar backend no interactivo para servidores
+# Usar backend no interactivo para servidores
 matplotlib.use('Agg')
 plt.style.use('default') 
 
@@ -29,8 +28,7 @@ CSV_FILENAME = 'TotalFeatures-ISCXFlowMeter.csv'
 # ** ¡IMPORTANTE! REEMPLAZA ESTA URL CON TU REPOSITORIO DE HUGGING FACE **
 BASE_RESOURCE_URL = "https://huggingface.co/datasets/Lia896gh/csv/resolve/main/" 
 
-# COLUMNAS ESENCIALES PARA EL ANÁLISIS/GRÁFICAS
-# Se usa 'calss' para que la carga inicial no falle. Luego se renombra.
+# Se usa 'calss' para que la carga inicial no falle (usecols). Luego se renombra.
 COLUMNS_NEEDED = [
     'calss', 'duration', 'total_fpackets', 'total_bpktl', 
     'min_fpktl', 'mean_fiat', 'flowPktsPerSecond', 'min_active', 
@@ -46,7 +44,7 @@ GLOBAL_LE_CLAS = None
 RESOURCES_LOADED = False
 
 # --------------------------------------------------------------------
-# *** FUNCIONES DE CARGA OPTIMIZADAS (No se necesitan cambios aquí) ***
+# *** FUNCIONES DE CARGA OPTIMIZADAS ***
 # --------------------------------------------------------------------
 
 def load_file_from_url(filename):
@@ -118,7 +116,7 @@ def initialize_global_resources():
         print(f"ERROR FATAL: Fallo al procesar recursos (joblib/csv) debido a: {e}")
     
 
-# Función auxiliar para convertir gráficas a base64 (Se mantiene igual)
+# Función auxiliar para convertir gráficas a base64
 def generar_grafica_base64(fig):
     """Convierte un objeto Matplotlib figure a una cadena base64."""
     buf = io.BytesIO()
@@ -130,7 +128,7 @@ def generar_grafica_base64(fig):
 
 
 # -------------------------------------------------------------------------
-# FUNCIÓN DE EJECUCIÓN (Se mantiene igual, usa los modelos globales)
+# FUNCIÓN DE EJECUCIÓN CON VERIFICACIONES DE SEGURIDAD
 # -------------------------------------------------------------------------
 
 def run_malware_analysis():
@@ -144,25 +142,33 @@ def run_malware_analysis():
             'dataframe': [] 
         }
 
-    # Usar los recursos globales
     df_safe = GLOBAL_DF.copy()
     model_f1 = GLOBAL_MODEL_F1
     model_reg = GLOBAL_MODEL_REG
     model_clas = GLOBAL_MODEL_CLAS
     le_clas = GLOBAL_LE_CLAS
-
-    # 2. Preprocesamiento de datos 
-    target_col_cls = 'Class' if 'Class' in df_safe.columns else 'calss'
+    
+    # Parámetros básicos
+    target_col_cls = 'Class' 
     features_cls_all = ['duration', 'total_fpackets', 'total_bpktl', 'min_fpktl', 'mean_fiat', 'flowPktsPerSecond', 'min_active', 'mean_active', 'Init_Win_bytes_forward']
     
-    # Muestreo para evitar OOM 
-    df_sample = df_safe.sample(frac=0.8, random_state=42) 
+    # Muestreo y Conteo de clases
+    df_sample = df_safe.sample(frac=0.8, random_state=42) # Usar 80% de las 200 filas
     class_counts = df_safe[target_col_cls].value_counts()
-
+    f1_rounded = 0.0 # Inicializar F1-Score
 
     # =========================================================================
     # PARTE A: CLASIFICACIÓN BINARIA (Calculo F1-Score)
     # =========================================================================
+    
+    # --- VERIFICACIÓN CRÍTICA 1: Suficientes Clases para F1-Score ---
+    if len(class_counts) < 2:
+        return { 
+            'error': f"Error ML: La muestra de {len(df_safe)} filas solo tiene {len(class_counts)} clases únicas. Se requieren al menos 2 para el cálculo F1.", 
+            'accuracy': 0.0, 
+            'dataframe': df_safe.head(10).to_dict('records') 
+        }
+        
     top_2_classes = class_counts.index[:2].tolist()
     df_filtered_cls_f1 = df_safe[df_safe[target_col_cls].isin(top_2_classes)].copy()
     class_map = {top_2_classes[0]: 0, top_2_classes[1]: 1} 
@@ -170,9 +176,14 @@ def run_malware_analysis():
     y_cls_f1 = df_filtered_cls_f1['target_binary']
     X_cls_f1 = df_filtered_cls_f1[features_cls_all].copy()
     X_cls_f1.replace([np.inf, -np.inf, np.nan], 0, inplace=True)
+    
+    # Split
+    if len(X_cls_f1) < 2:
+        return {'error': "Error ML: Después de filtrar, no quedan suficientes muestras para el split de F1.", 'accuracy': 0.0, 'dataframe': [] }
+        
     X_train_f1, X_test_f1, y_train_f1, y_test_f1 = train_test_split(X_cls_f1, y_cls_f1, test_size=0.4, random_state=42)
     
-    # Crear y usar el Scaler
+    # Escalar y Predecir
     scaler_f1 = StandardScaler()
     scaler_f1.fit(X_train_f1) 
     X_test_scaled_f1 = scaler_f1.transform(X_test_f1)
@@ -184,40 +195,54 @@ def run_malware_analysis():
     # =========================================================================
     # PARTE B: GRÁFICA 1 - Clasificación SVM
     # =========================================================================
-    top_3_classes = class_counts.index[:3].tolist()
-    df_filtered_svm = df_sample[df_sample[target_col_cls].isin(top_3_classes)].copy()
-    X_clas_filt = df_filtered_svm[['min_flowpktl', 'flow_fin']].copy()
-    X_clas_filt['min_flowpktl'] = np.log1p(X_clas_filt['min_flowpktl'])
-    X_clas_filt['flow_fin'] = np.log1p(X_clas_filt['flow_fin'])
-    y_clas_encoded = le_clas.transform(df_filtered_svm[target_col_cls]) 
-
-    x_min, x_max = X_clas_filt.iloc[:, 0].min() - 0.1, X_clas_filt.iloc[:, 0].max() + 0.1
-    y_min, y_max = X_clas_filt.iloc[:, 1].min() - 0.1, X_clas_filt.iloc[:, 1].max() + 0.1
-    xx, yy = np.meshgrid(np.linspace(x_min, x_max, 200), np.linspace(y_min, y_max, 200))
-    feature_names = X_clas_filt.columns
-    grid_data_svc = pd.DataFrame(np.c_[xx.ravel(), yy.ravel()], columns=feature_names) 
     
-    grid_data_svc.replace([np.inf, -np.inf, np.nan], 0, inplace=True) 
-
-    Z = model_clas.predict(grid_data_svc) 
-    Z = Z.reshape(xx.shape)
+    required_svm_features = ['min_flowpktl', 'flow_fin']
     
-    fig1, ax1 = plt.subplots(figsize=(10, 8))
-    ax1.contourf(xx, yy, Z, alpha=0.5, cmap='coolwarm') 
-    class_names_svm = le_clas.classes_
-    for i, class_name in enumerate(class_names_svm):
-        ax1.scatter(X_clas_filt.iloc[y_clas_encoded == i, 0], X_clas_filt.iloc[y_clas_encoded == i, 1],
-                    edgecolors='k', s=60, label=f'Clase: {class_name}', alpha=0.8)
-    ax1.set_title('Gráfica 1: Separabilidad de Datos con SVM (Log Transformación)', fontsize=14)
-    ax1.set_xlabel('Característica: log(1 + min_flowpktl)', fontsize=12) 
-    ax1.set_ylabel('Característica: log(1 + flow_fin)', fontsize=12)
-    ax1.legend(loc='upper right', fontsize=10)
-    ax1.grid(True, linestyle='--', alpha=0.6)
-    grafica1_b64 = generar_grafica_base64(fig1)
+    # --- VERIFICACIÓN CRÍTICA 2: Suficientes Características/Clases para SVM ---
+    if not all(f in df_safe.columns for f in required_svm_features):
+        grafica1_b64 = None
+        print("ADVERTENCIA: Saltando Gráfica 1, falta 'min_flowpktl' o 'flow_fin'.")
+    elif len(class_counts) < 3:
+        grafica1_b64 = None
+        print(f"ADVERTENCIA: Saltando Gráfica 1, solo hay {len(class_counts)} clases (se requieren 3).")
+    else:
+        top_3_classes = class_counts.index[:3].tolist()
+        df_filtered_svm = df_sample[df_sample[target_col_cls].isin(top_3_classes)].copy()
+        X_clas_filt = df_filtered_svm[required_svm_features].copy()
+        
+        # Lógica de transformación y predicción
+        X_clas_filt['min_flowpktl'] = np.log1p(X_clas_filt['min_flowpktl'])
+        X_clas_filt['flow_fin'] = np.log1p(X_clas_filt['flow_fin'])
+        y_clas_encoded = le_clas.transform(df_filtered_svm[target_col_cls]) 
+
+        x_min, x_max = X_clas_filt.iloc[:, 0].min() - 0.1, X_clas_filt.iloc[:, 0].max() + 0.1
+        y_min, y_max = X_clas_filt.iloc[:, 1].min() - 0.1, X_clas_filt.iloc[:, 1].max() + 0.1
+        xx, yy = np.meshgrid(np.linspace(x_min, x_max, 200), np.linspace(y_min, y_max, 200))
+        feature_names = X_clas_filt.columns
+        grid_data_svc = pd.DataFrame(np.c_[xx.ravel(), yy.ravel()], columns=feature_names) 
+        grid_data_svc.replace([np.inf, -np.inf, np.nan], 0, inplace=True) 
+
+        Z = model_clas.predict(grid_data_svc) 
+        Z = Z.reshape(xx.shape)
+        
+        fig1, ax1 = plt.subplots(figsize=(10, 8))
+        ax1.contourf(xx, yy, Z, alpha=0.5, cmap='coolwarm') 
+        class_names_svm = le_clas.classes_
+        for i, class_name in enumerate(class_names_svm):
+            ax1.scatter(X_clas_filt.iloc[y_clas_encoded == i, 0], X_clas_filt.iloc[y_clas_encoded == i, 1],
+                        edgecolors='k', s=60, label=f'Clase: {class_name}', alpha=0.8)
+        ax1.set_title('Gráfica 1: Separabilidad de Datos con SVM (Log Transformación)', fontsize=14)
+        ax1.set_xlabel('Característica: log(1 + min_flowpktl)', fontsize=12) 
+        ax1.set_ylabel('Característica: log(1 + flow_fin)', fontsize=12)
+        ax1.legend(loc='upper right', fontsize=10)
+        ax1.grid(True, linestyle='--', alpha=0.6)
+        grafica1_b64 = generar_grafica_base64(fig1)
 
     # =========================================================================
     # PARTE C: GRÁFICA 2 - Superficie de Predicción 
     # =========================================================================
+    
+    # Preparación de datos de regresión
     y_reg_original = df_sample['Init_Win_bytes_forward'].copy()
     y_reg_original[y_reg_original < 0] = 0
     y_reg_original.replace([np.inf, -np.inf, np.nan], 0, inplace=True) 
@@ -225,48 +250,59 @@ def run_malware_analysis():
     X_reg = df_sample.drop(['Init_Win_bytes_forward', target_col_cls], axis=1, errors='ignore')
     X_reg.replace([np.inf, -np.inf, np.nan], 0, inplace=True) 
     
-    feature_importances = pd.Series(model_reg.feature_importances_, index=X_reg.columns)
-    top_2_features = feature_importances.nlargest(2).index.tolist()
-    if len(top_2_features) < 2:
-        top_2_features = X_reg.columns[:2].tolist()
+    # --- VERIFICACIÓN CRÍTICA 3: Suficientes Features para Regresión ---
+    if len(X_reg.columns) < 2:
+        regression_data_surface = {}
+        grafica3_b64 = None
+        print("ADVERTENCIA: Saltando Gráfica 2 y 3, no hay suficientes columnas para X_reg.")
+    else:
+        # Lógica para obtener las 2 features más importantes
+        feature_importances = pd.Series(model_reg.feature_importances_, index=X_reg.columns)
+        top_2_features = feature_importances.nlargest(2).index.tolist()
+        
+        # Respaldo si no hay 2 importancias (aunque ya hay 2 features)
+        if len(top_2_features) < 2:
+            top_2_features = X_reg.columns[:2].tolist()
 
-    X_reg_top = X_reg[top_2_features]
-    X_reg_top.replace([np.inf, -np.inf, np.nan], 0, inplace=True)
-    
-    X_train_reg, X_test_reg, y_train_reg_transf, y_test_reg_transf = train_test_split(
-        X_reg_top, y_reg_transformed, test_size=0.3, random_state=42
-    )
+        X_reg_top = X_reg[top_2_features]
+        X_reg_top.replace([np.inf, -np.inf, np.nan], 0, inplace=True)
+        
+        # Split para el test set de Regresión
+        X_train_reg, X_test_reg, y_train_reg_transf, y_test_reg_transf = train_test_split(
+            X_reg_top, y_reg_transformed, test_size=0.3, random_state=42
+        )
+        
+        # Creación de la malla para la superficie de predicción (Gráfica 2)
+        x_min_r, x_max_r = X_reg_top.iloc[:, 0].min() - 0.5, X_reg_top.iloc[:, 0].max() + 0.5
+        y_min_r, y_max_r = X_reg_top.iloc[:, 1].min() - 0.5, X_reg_top.iloc[:, 1].max() + 0.5
+        xx_r, yy_r = np.meshgrid(np.linspace(x_min_r, x_max_r, 50), np.linspace(y_min_r, y_max_r, 50))
+        grid_data = pd.DataFrame(np.c_[xx_r.ravel(), yy_r.ravel()], columns=top_2_features)
+        grid_data.replace([np.inf, -np.inf], 0, inplace=True) 
 
-    x_min_r, x_max_r = X_reg_top.iloc[:, 0].min() - 0.5, X_reg_top.iloc[:, 0].max() + 0.5
-    y_min_r, y_max_r = X_reg_top.iloc[:, 1].min() - 0.5, X_reg_top.iloc[:, 1].max() + 0.5
-    xx_r, yy_r = np.meshgrid(np.linspace(x_min_r, x_max_r, 50), np.linspace(y_min_r, y_max_r, 50))
-    grid_data = pd.DataFrame(np.c_[xx_r.ravel(), yy_r.ravel()], columns=top_2_features)
-    grid_data.replace([np.inf, -np.inf], 0, inplace=True) 
+        Z_reg = model_reg.predict(grid_data) 
 
-    Z_reg = model_reg.predict(grid_data) 
-
-    regression_data_surface = {
-        'x_feature': top_2_features[0], 'y_feature': top_2_features[1],
-        'x_line': xx_r.flatten().tolist(), 'y_line': yy_r.flatten().tolist(),           
-        'z_line': Z_reg.flatten().tolist(), 'x_data': X_reg_top.iloc[:, 0].tolist(), 
-        'y_data': X_reg_top.iloc[:, 1].tolist(), 'y_data_class': y_reg_transformed.tolist()
-    }
-    
-    # =========================================================================
-    # PARTE D: GRÁFICA 3 - Reales vs Predichos
-    # =========================================================================
-    y_pred_reg_transf = model_reg.predict(X_test_reg)
-    
-    fig3, ax3 = plt.subplots(figsize=(10, 8))
-    ax3.scatter(y_test_reg_transf, y_pred_reg_transf, alpha=0.6, color='#5B21B6') 
-    min_val = min(y_test_reg_transf.min(), y_pred_reg_transf.min())
-    max_val = max(y_test_reg_transf.max(), y_pred_reg_transf.max())
-    ax3.plot([min_val, max_val], [min_val, max_val], 'r--', lw=2)
-    ax3.set_xlabel("Valores Reales (log transformados)", fontsize=12)
-    ax3.set_ylabel("Valores Predichos (log transformados)", fontsize=12)
-    ax3.set_title("Gráfica 3: Valores reales vs. Predicciones (Log Transformados)", fontsize=14)
-    ax3.grid(True, linestyle='--', alpha=0.6)
-    grafica3_b64 = generar_grafica_base64(fig3)
+        regression_data_surface = {
+            'x_feature': top_2_features[0], 'y_feature': top_2_features[1],
+            'x_line': xx_r.flatten().tolist(), 'y_line': yy_r.flatten().tolist(),           
+            'z_line': Z_reg.flatten().tolist(), 'x_data': X_reg_top.iloc[:, 0].tolist(), 
+            'y_data': X_reg_top.iloc[:, 1].tolist(), 'y_data_class': y_reg_transformed.tolist()
+        }
+        
+        # =========================================================================
+        # PARTE D: GRÁFICA 3 - Reales vs Predichos
+        # =========================================================================
+        y_pred_reg_transf = model_reg.predict(X_test_reg)
+        
+        fig3, ax3 = plt.subplots(figsize=(10, 8))
+        ax3.scatter(y_test_reg_transf, y_pred_reg_transf, alpha=0.6, color='#5B21B6') 
+        min_val = min(y_test_reg_transf.min(), y_pred_reg_transf.min())
+        max_val = max(y_test_reg_transf.max(), y_pred_reg_transf.max())
+        ax3.plot([min_val, max_val], [min_val, max_val], 'r--', lw=2)
+        ax3.set_xlabel("Valores Reales (log transformados)", fontsize=12)
+        ax3.set_ylabel("Valores Predichos (log transformados)", fontsize=12)
+        ax3.set_title("Gráfica 3: Valores reales vs. Predicciones (Log Transformados)", fontsize=14)
+        ax3.grid(True, linestyle='--', alpha=0.6)
+        grafica3_b64 = generar_grafica_base64(fig3)
 
     # 3. Preparación de Salida Final
     df_sample_head = df_safe.head(10).to_dict('records') 
