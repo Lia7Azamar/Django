@@ -26,8 +26,14 @@ LE_CLAS_FILENAME = 'le_clas.joblib'
 CSV_FILENAME = 'TotalFeatures-ISCXFlowMeter.csv'
 
 # ** ¡IMPORTANTE! REEMPLAZA ESTA URL CON TU REPOSITORIO DE HUGGING FACE **
-# Debe terminar en 'resolve/main/' y tener una barra al final.
 BASE_RESOURCE_URL = "https://huggingface.co/datasets/Lia896gh/csv/resolve/main/" 
+
+# COLUMNAS ESENCIALES PARA EL ANÁLISIS/GRÁFICAS
+COLUMNS_NEEDED = [
+    'Class', 'calss', 'duration', 'total_fpackets', 'total_bpktl', 
+    'min_fpktl', 'mean_fiat', 'flowPktsPerSecond', 'min_active', 
+    'mean_active', 'Init_Win_bytes_forward', 'min_flowpktl', 'flow_fin'
+]
 
 # Inicializar variables globales
 GLOBAL_DF = None
@@ -35,19 +41,14 @@ GLOBAL_MODEL_F1 = None
 GLOBAL_MODEL_REG = None
 GLOBAL_MODEL_CLAS = None
 GLOBAL_LE_CLAS = None
-
-# Variable de estado para controlar la carga
 RESOURCES_LOADED = False
 
 # --------------------------------------------------------------------
-# *** NUEVAS FUNCIONES PARA CARGA DESDE URL (HUGGING FACE) ***
+# *** FUNCIONES DE CARGA OPTIMIZADAS ***
 # --------------------------------------------------------------------
 
 def load_file_from_url(filename):
-    """
-    Descarga un archivo (generalmente pequeño, como los modelos) y lo devuelve como bytes.
-    Se usa para joblib.
-    """
+    """Descarga un archivo (modelos) y lo devuelve como bytes."""
     url = f"{BASE_RESOURCE_URL}{filename}"
     print(f"Intentando cargar recurso desde: {url}")
     response = requests.get(url, timeout=60) 
@@ -55,22 +56,17 @@ def load_file_from_url(filename):
     return response.content
 
 def load_file_from_url_stream(filename):
-    """
-    Descarga el CSV en modo STREAMING para evitar que el archivo completo 
-    se almacene en una sola variable RAM antes de que Pandas lo lea.
-    """
+    """Descarga el CSV en modo STREAMING para ahorrar RAM."""
     url = f"{BASE_RESOURCE_URL}{filename}"
     print(f"Intentando cargar recurso desde: {url} (Streaming)")
-    # El stream=True asegura que los datos no se descarguen todos a la vez en response.content
     response = requests.get(url, stream=True, timeout=60) 
     response.raise_for_status() 
-    # Usar io.BytesIO con el contenido (que será más pequeño gracias a stream=True)
     return io.BytesIO(response.content) 
 
 def initialize_global_resources():
     """
-    Carga todos los recursos de ML desde URLs de Hugging Face directamente a la memoria.
-    Implementa limitación de filas y streaming para ahorrar memoria.
+    Carga todos los recursos de ML globalmente. Esta función es llamada 
+    una sola vez por el proceso maestro de Gunicorn usando --preload.
     """
     global GLOBAL_DF, GLOBAL_MODEL_F1, GLOBAL_MODEL_REG, GLOBAL_MODEL_CLAS, GLOBAL_LE_CLAS, RESOURCES_LOADED
 
@@ -78,21 +74,20 @@ def initialize_global_resources():
         return 
 
     try:
-        # 1. Carga del DataFrame - CON STREAMING Y MUESTRA MUY PEQUEÑA
+        # 1. Carga del DataFrame - CON STREAMING, NROWS Y USECOLS
         
-        # **CAMBIO CLAVE: Cargar solo las primeras N filas para evitar OOM (Out Of Memory)**
-        N_ROWS_TO_LOAD = 1000 
-        print(f"Cargando las primeras {N_ROWS_TO_LOAD} filas del CSV para máximo ahorro de RAM.")
+        N_ROWS_TO_LOAD = 200 # **MÁXIMO AHORRO DE RAM**
+        print(f"Cargando las primeras {N_ROWS_TO_LOAD} filas y columnas específicas del CSV.")
         
-        # Usar la función de streaming para el CSV
         csv_stream = load_file_from_url_stream(CSV_FILENAME)
         
         df_temp = pd.read_csv(
             csv_stream, 
-            nrows=N_ROWS_TO_LOAD 
+            nrows=N_ROWS_TO_LOAD,
+            usecols=COLUMNS_NEEDED # Solo carga las columnas necesarias
         ) 
         
-        # Preprocesamiento inicial (Tu lógica original)
+        # Preprocesamiento inicial 
         df_temp.columns = df_temp.columns.str.strip()
         df_temp.columns = [col.replace("calss", "Class") for col in df_temp.columns] 
         for col in df_temp.columns:
@@ -101,8 +96,7 @@ def initialize_global_resources():
         df_temp.replace([np.inf, -np.inf, np.nan], 0, inplace=True)
         GLOBAL_DF = df_temp.copy()
         
-        # 2. Carga de Modelos (usando la función normal load_file_from_url)
-        
+        # 2. Carga de Modelos
         f1_bytes = load_file_from_url(MODEL_F1_FILENAME)
         GLOBAL_MODEL_F1 = joblib.load(io.BytesIO(f1_bytes))
         
@@ -119,7 +113,7 @@ def initialize_global_resources():
         print("Recursos de ML cargados exitosamente desde Hugging Face.")
 
     except requests.exceptions.RequestException as e:
-        print(f"ERROR FATAL: Fallo de red al cargar recursos desde la URL. ¿Es la URL correcta y el archivo público? Error: {e}")
+        print(f"ERROR FATAL: Fallo de red al cargar recursos desde la URL. Error: {e}")
     except Exception as e:
         print(f"ERROR FATAL: Fallo al procesar recursos (joblib/csv) debido a: {e}")
     
@@ -136,36 +130,37 @@ def generar_grafica_base64(fig):
 
 
 # -------------------------------------------------------------------------
-# FUNCIÓN DE EJECUCIÓN (USADA POR DJANGO EN RENDER)
+# FUNCIÓN DE EJECUCIÓN (Mantiene la lógica original)
 # -------------------------------------------------------------------------
 
 def run_malware_analysis():
     """Usa los modelos y datos cargados globalmente y genera resultados."""
     
-    # 1. Inicialización de recursos al comienzo de la función
-    initialize_global_resources() 
-
+    # 1. Ya NO llamamos a initialize_global_resources() aquí, pues se hace en wsgi.py
+    # La validación se hace directamente sobre la variable global
+    
     # 2. Comprobación de recursos globales
-    if not RESOURCES_LOADED:
+    if not RESOURCES_LOADED or GLOBAL_DF is None:
         return { 
-            'error': "ERROR: Recursos de ML no cargados. Verifique las URLs de los archivos.", 
+            'error': "ERROR: Recursos de ML no cargados. El servidor falló en la inicialización.", 
             'accuracy': 0.0, 
             'dataframe': [] 
         }
 
-    # Usar los recursos globales
+    # Usar los recursos globales (resto del código es el mismo)
     df_safe = GLOBAL_DF.copy()
     model_f1 = GLOBAL_MODEL_F1
     model_reg = GLOBAL_MODEL_REG
     model_clas = GLOBAL_MODEL_CLAS
     le_clas = GLOBAL_LE_CLAS
 
+    # ... (El resto del código de análisis, gráficas, y métricas es el mismo) ...
+
     # 2. Preprocesamiento de datos (solo de variables globales)
     target_col_cls = 'Class' if 'Class' in df_safe.columns else 'calss'
     features_cls_all = ['duration', 'total_fpackets', 'total_bpktl', 'min_fpktl', 'mean_fiat', 'flowPktsPerSecond', 'min_active', 'mean_active', 'Init_Win_bytes_forward']
     
-    # Muestreo para evitar OOM si el DataFrame de 1k filas sigue siendo grande
-    # Usar una muestra del 80% de las 1000 filas cargadas.
+    # Muestreo para evitar OOM si el DataFrame de 200 filas sigue siendo grande
     df_sample = df_safe.sample(frac=0.8, random_state=42) 
     class_counts = df_safe[target_col_cls].value_counts()
 
@@ -207,7 +202,6 @@ def run_malware_analysis():
     feature_names = X_clas_filt.columns
     grid_data_svc = pd.DataFrame(np.c_[xx.ravel(), yy.ravel()], columns=feature_names) 
     
-    # Asegurarse de que el modelo no reciba NaN o Infinito si la muestra es extraña
     grid_data_svc.replace([np.inf, -np.inf, np.nan], 0, inplace=True) 
 
     Z = model_clas.predict(grid_data_svc) 
