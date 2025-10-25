@@ -17,27 +17,12 @@ from django.conf import settings
 matplotlib.use('Agg')
 plt.style.use('default') 
 
-# --- NOMBRES DE ARCHIVOS ---
+# --- NOMBRES DE ARCHIVOS GLOBALES ---
 MODEL_F1_FILENAME = 'model_f1.joblib'
 MODEL_REG_FILENAME = 'model_reg.joblib'
 MODEL_SVM_FILENAME = 'model_svm.joblib'
 LE_CLAS_FILENAME = 'le_clas.joblib'
 CSV_FILENAME = 'TotalFeatures-ISCXFlowMeter.csv'
-
-# --- RUTAS FINALES: TODAS DENTRO DE LA CARPETA 'analysis' ---
-# Establecemos el directorio base para todos los recursos
-RESOURCES_DIR = os.path.join(settings.BASE_DIR, 'analysis')
-
-CSV_FILE_PATH = os.path.join(RESOURCES_DIR, CSV_FILENAME)
-MODEL_F1_PATH = os.path.join(RESOURCES_DIR, MODEL_F1_FILENAME)
-MODEL_REG_PATH = os.path.join(RESOURCES_DIR, MODEL_REG_FILENAME)
-MODEL_SVM_PATH = os.path.join(RESOURCES_DIR, MODEL_SVM_FILENAME)
-LE_CLAS_PATH = os.path.join(RESOURCES_DIR, LE_CLAS_FILENAME)
-
-
-# --------------------------------------------------------------------
-# *** CARGA GLOBAL DE DATOS Y MODELOS (Optimización de Memoria) ***
-# --------------------------------------------------------------------
 
 # Inicializar variables globales
 GLOBAL_DF = None
@@ -46,48 +31,60 @@ GLOBAL_MODEL_REG = None
 GLOBAL_MODEL_CLAS = None
 GLOBAL_LE_CLAS = None
 
-try:
-    # Carga del DataFrame
-    df_temp = pd.read_csv(CSV_FILE_PATH)
-    
-    # Preprocesamiento inicial
-    df_temp.columns = df_temp.columns.str.strip()
-    df_temp.columns = [col.replace("calss", "Class") for col in df_temp.columns] 
-    for col in df_temp.columns:
-        if col not in ['Class', 'calss']:
-            df_temp[col] = pd.to_numeric(df_temp[col], errors='coerce') 
-    df_temp.replace([np.inf, -np.inf, np.nan], 0, inplace=True)
-    GLOBAL_DF = df_temp
-    
-    # Carga de Modelos
-    GLOBAL_MODEL_F1 = joblib.load(MODEL_F1_PATH)
-    GLOBAL_MODEL_REG = joblib.load(MODEL_REG_PATH)
-    GLOBAL_MODEL_CLAS = joblib.load(MODEL_SVM_PATH)
-    GLOBAL_LE_CLAS = joblib.load(LE_CLAS_PATH)
-    
-    print("Recursos de ML cargados exitosamente de forma global.")
+# Variable de estado para controlar la carga
+RESOURCES_LOADED = False
 
-except FileNotFoundError:
-    print(f"ERROR FATAL: Archivos de ML no encontrados. Verifique la carpeta: {RESOURCES_DIR}")
-except Exception as e:
-    print(f"ERROR FATAL: Fallo al cargar recursos debido a: {e}")
-    
+# --------------------------------------------------------------------
+# *** NUEVA FUNCIÓN DE INICIALIZACIÓN DE RECURSOS ***
+# --------------------------------------------------------------------
 
-# -------------------------------------------------------------------------
-# FUNCIÓN DE ENTRENAMIENTO Y GUARDADO (EJECUCIÓN LOCAL SOLAMENTE)
-# -------------------------------------------------------------------------
+def initialize_global_resources():
+    """
+    Define rutas y carga todos los recursos de ML.
+    Solo accede a settings.BASE_DIR DENTRO de esta función.
+    """
+    global GLOBAL_DF, GLOBAL_MODEL_F1, GLOBAL_MODEL_REG, GLOBAL_MODEL_CLAS, GLOBAL_LE_CLAS, RESOURCES_LOADED
 
-def train_and_save_models(df_safe):
-    """Entrena y guarda los modelos necesarios para la aplicación."""
-    # ... (El código de entrenamiento sigue igual) ...
-    # Nota: Asegúrate de que tu ejecución local también use el path 'analysis' si es necesario.
-    
-    # Ejemplo de guardado:
-    joblib.dump(model_f1, MODEL_F1_FILENAME)
-    print(f"Modelo F1 guardado en {MODEL_F1_FILENAME}")
-    
-    # ... (resto de train_and_save_models) ...
+    if RESOURCES_LOADED:
+        return # Ya cargado, salir
 
+    try:
+        # --- RUTAS FINALES: Acceso a settings.BASE_DIR de forma segura ---
+        # El acceso está contenido en esta función, fuera del módulo global.
+        RESOURCES_DIR = os.path.join(settings.BASE_DIR, 'analysis')
+
+        CSV_FILE_PATH = os.path.join(RESOURCES_DIR, CSV_FILENAME)
+        MODEL_F1_PATH = os.path.join(RESOURCES_DIR, MODEL_F1_FILENAME)
+        MODEL_REG_PATH = os.path.join(RESOURCES_DIR, MODEL_REG_FILENAME)
+        MODEL_SVM_PATH = os.path.join(RESOURCES_DIR, MODEL_SVM_FILENAME)
+        LE_CLAS_PATH = os.path.join(RESOURCES_DIR, LE_CLAS_FILENAME)
+
+        # Carga del DataFrame
+        df_temp = pd.read_csv(CSV_FILE_PATH)
+        
+        # Preprocesamiento inicial
+        df_temp.columns = df_temp.columns.str.strip()
+        df_temp.columns = [col.replace("calss", "Class") for col in df_temp.columns] 
+        for col in df_temp.columns:
+            if col not in ['Class', 'calss']:
+                df_temp[col] = pd.to_numeric(df_temp[col], errors='coerce') 
+        df_temp.replace([np.inf, -np.inf, np.nan], 0, inplace=True)
+        GLOBAL_DF = df_temp
+        
+        # Carga de Modelos
+        GLOBAL_MODEL_F1 = joblib.load(MODEL_F1_PATH)
+        GLOBAL_MODEL_REG = joblib.load(MODEL_REG_PATH)
+        GLOBAL_MODEL_CLAS = joblib.load(MODEL_SVM_PATH)
+        GLOBAL_LE_CLAS = joblib.load(LE_CLAS_PATH)
+        
+        RESOURCES_LOADED = True
+        print("Recursos de ML cargados exitosamente de forma global.")
+
+    except FileNotFoundError:
+        print(f"ERROR FATAL: Archivos de ML no encontrados. Verifique la carpeta: {RESOURCES_DIR}")
+    except Exception as e:
+        print(f"ERROR FATAL: Fallo al cargar recursos debido a: {e}")
+    
 
 # Función auxiliar para convertir gráficas a base64
 def generar_grafica_base64(fig):
@@ -99,6 +96,7 @@ def generar_grafica_base64(fig):
     plt.close(fig)
     return img_b64
 
+
 # -------------------------------------------------------------------------
 # FUNCIÓN DE EJECUCIÓN (USADA POR DJANGO EN RENDER)
 # -------------------------------------------------------------------------
@@ -106,10 +104,14 @@ def generar_grafica_base64(fig):
 def run_malware_analysis():
     """Usa los modelos y datos cargados globalmente y genera resultados."""
     
-    # 1. Comprobación de recursos globales
-    if GLOBAL_DF is None or GLOBAL_MODEL_F1 is None:
+    # 1. Inicialización de recursos al comienzo de la función
+    # Esto asegura que settings.BASE_DIR se lea cuando Django está listo.
+    initialize_global_resources() 
+
+    # 2. Comprobación de recursos globales
+    if not RESOURCES_LOADED:
         return { 
-            'error': f"ERROR: Recursos de ML no cargados. Verifique que los archivos estén en {RESOURCES_DIR}.", 
+            'error': "ERROR: Recursos de ML no cargados. Verifique las rutas de los archivos.", 
             'accuracy': 0.0, 
             'dataframe': [] 
         }
@@ -121,6 +123,8 @@ def run_malware_analysis():
     model_clas = GLOBAL_MODEL_CLAS
     le_clas = GLOBAL_LE_CLAS
 
+    # ... (El resto del código de run_malware_analysis sigue igual) ...
+    
     # 2. Preprocesamiento de datos (solo de variables globales)
     target_col_cls = 'Class' if 'Class' in df_safe.columns else 'calss'
     features_cls_all = ['duration', 'total_fpackets', 'total_bpktl', 'min_fpktl', 'mean_fiat', 'flowPktsPerSecond', 'min_active', 'mean_active', 'Init_Win_bytes_forward']
@@ -244,10 +248,28 @@ def run_malware_analysis():
         'regressionData': regression_data_surface
     }
 
+# -------------------------------------------------------------------------
+# FUNCIÓN DE ENTRENAMIENTO Y GUARDADO (EJECUCIÓN LOCAL SOLAMENTE)
+# -------------------------------------------------------------------------
+
+def train_and_save_models(df_safe):
+    """Entrena y guarda los modelos necesarios para la aplicación."""
+    # ... (Asegúrate de que este código use os.path.join(os.getcwd(), 'nombre_archivo.joblib')
+    # si se ejecuta localmente y quieres guardar en el directorio actual) ...
+    
+    # Ejemplo de guardado:
+    joblib.dump(model_f1, MODEL_F1_FILENAME)
+    print(f"Modelo F1 guardado en {MODEL_F1_FILENAME}")
+    
+    # ... (resto de train_and_save_models) ...
+
+
 # Si ejecutas este archivo directamente, entrenas y guardas los modelos
 if __name__ == '__main__':
     # Carga de Datos inicial para el entrenamiento local
     file_path = CSV_FILENAME # Path local, asume que se ejecuta desde la raíz o dentro de analysis
+    
+    # ... (El código de carga local es correcto) ...
     df = pd.read_csv(file_path)
     df.columns = df.columns.str.strip()
     df.columns = [col.replace("calss", "Class") for col in df.columns] 
