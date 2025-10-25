@@ -24,23 +24,22 @@ MODEL_SVM_FILENAME = 'model_svm.joblib'
 LE_CLAS_FILENAME = 'le_clas.joblib'
 CSV_FILENAME = 'TotalFeatures-ISCXFlowMeter.csv'
 
-# --- RUTAS ---
-# Si tu CSV está dentro de 'analysis/', ajusta la ruta aquí. 
-# ASUMIMOS QUE CSV ESTÁ EN 'analysis/' y MODELOS EN LA RAÍZ (junto a manage.py).
-CSV_FILE_PATH = os.path.join(settings.BASE_DIR, 'analysis', CSV_FILENAME)
+# --- RUTAS FINALES: TODAS DENTRO DE LA CARPETA 'analysis' ---
+# Establecemos el directorio base para todos los recursos
+RESOURCES_DIR = os.path.join(settings.BASE_DIR, 'analysis')
 
-# ASUMIMOS MODELOS EN LA RAÍZ:
-MODEL_F1_PATH = os.path.join(settings.BASE_DIR, MODEL_F1_FILENAME)
-MODEL_REG_PATH = os.path.join(settings.BASE_DIR, MODEL_REG_FILENAME)
-MODEL_SVM_PATH = os.path.join(settings.BASE_DIR, MODEL_SVM_FILENAME)
-LE_CLAS_PATH = os.path.join(settings.BASE_DIR, LE_CLAS_FILENAME)
+CSV_FILE_PATH = os.path.join(RESOURCES_DIR, CSV_FILENAME)
+MODEL_F1_PATH = os.path.join(RESOURCES_DIR, MODEL_F1_FILENAME)
+MODEL_REG_PATH = os.path.join(RESOURCES_DIR, MODEL_REG_FILENAME)
+MODEL_SVM_PATH = os.path.join(RESOURCES_DIR, MODEL_SVM_FILENAME)
+LE_CLAS_PATH = os.path.join(RESOURCES_DIR, LE_CLAS_FILENAME)
 
 
 # --------------------------------------------------------------------
 # *** CARGA GLOBAL DE DATOS Y MODELOS (Optimización de Memoria) ***
 # --------------------------------------------------------------------
 
-# Inicializar variables globales para los modelos y datos
+# Inicializar variables globales
 GLOBAL_DF = None
 GLOBAL_MODEL_F1 = None
 GLOBAL_MODEL_REG = None
@@ -51,7 +50,7 @@ try:
     # Carga del DataFrame
     df_temp = pd.read_csv(CSV_FILE_PATH)
     
-    # Preprocesamiento inicial (para datos globales)
+    # Preprocesamiento inicial
     df_temp.columns = df_temp.columns.str.strip()
     df_temp.columns = [col.replace("calss", "Class") for col in df_temp.columns] 
     for col in df_temp.columns:
@@ -69,7 +68,7 @@ try:
     print("Recursos de ML cargados exitosamente de forma global.")
 
 except FileNotFoundError:
-    print("ERROR FATAL: Archivos de ML (CSV o Modelos) no encontrados en el PATH.")
+    print(f"ERROR FATAL: Archivos de ML no encontrados. Verifique la carpeta: {RESOURCES_DIR}")
 except Exception as e:
     print(f"ERROR FATAL: Fallo al cargar recursos debido a: {e}")
     
@@ -78,10 +77,19 @@ except Exception as e:
 # FUNCIÓN DE ENTRENAMIENTO Y GUARDADO (EJECUCIÓN LOCAL SOLAMENTE)
 # -------------------------------------------------------------------------
 
-# ... (Mantener la función train_and_save_models sin cambios, ya que solo es local) ...
+def train_and_save_models(df_safe):
+    """Entrena y guarda los modelos necesarios para la aplicación."""
+    # ... (El código de entrenamiento sigue igual) ...
+    # Nota: Asegúrate de que tu ejecución local también use el path 'analysis' si es necesario.
+    
+    # Ejemplo de guardado:
+    joblib.dump(model_f1, MODEL_F1_FILENAME)
+    print(f"Modelo F1 guardado en {MODEL_F1_FILENAME}")
+    
+    # ... (resto de train_and_save_models) ...
 
 
-# Función auxiliar para convertir gráficas a base64 (Asumo que existe)
+# Función auxiliar para convertir gráficas a base64
 def generar_grafica_base64(fig):
     """Convierte un objeto Matplotlib figure a una cadena base64."""
     buf = io.BytesIO()
@@ -101,7 +109,7 @@ def run_malware_analysis():
     # 1. Comprobación de recursos globales
     if GLOBAL_DF is None or GLOBAL_MODEL_F1 is None:
         return { 
-            'error': f"ERROR: Recursos de ML no cargados. Posiblemente por 'Archivo no encontrado' ({CSV_FILE_PATH}) o 'Memoria Insuficiente' durante el arranque del servidor.", 
+            'error': f"ERROR: Recursos de ML no cargados. Verifique que los archivos estén en {RESOURCES_DIR}.", 
             'accuracy': 0.0, 
             'dataframe': [] 
         }
@@ -123,7 +131,6 @@ def run_malware_analysis():
     # =========================================================================
     # PARTE A: CLASIFICACIÓN BINARIA (Calculo F1-Score)
     # =========================================================================
-    # ... (El código aquí sigue usando model_f1, df_safe, etc. SIN CAMBIOS)
     top_2_classes = class_counts.index[:2].tolist()
     df_filtered_cls_f1 = df_safe[df_safe[target_col_cls].isin(top_2_classes)].copy()
     class_map = {top_2_classes[0]: 0, top_2_classes[1]: 1} 
@@ -143,11 +150,8 @@ def run_malware_analysis():
     f1_rounded = round(f1, 4)
 
     # =========================================================================
-    # PARTE B, C, D: Gráficas
+    # PARTE B: GRÁFICA 1 - Clasificación SVM
     # =========================================================================
-    # ... (El resto del código de gráficas y regresión sigue siendo el mismo, 
-    # utilizando las variables globales model_clas, model_reg, y le_clas) ...
-    
     top_3_classes = class_counts.index[:3].tolist()
     df_filtered_svm = df_sample[df_sample[target_col_cls].isin(top_3_classes)].copy()
     X_clas_filt = df_filtered_svm[['min_flowpktl', 'flow_fin']].copy()
@@ -176,6 +180,9 @@ def run_malware_analysis():
     ax1.grid(True, linestyle='--', alpha=0.6)
     grafica1_b64 = generar_grafica_base64(fig1)
 
+    # =========================================================================
+    # PARTE C: GRÁFICA 2 - Superficie de Predicción 
+    # =========================================================================
     y_reg_original = df_sample['Init_Win_bytes_forward'].copy()
     y_reg_original[y_reg_original < 0] = 0
     y_reg_original.replace([np.inf, -np.inf, np.nan], 0, inplace=True) 
@@ -210,6 +217,9 @@ def run_malware_analysis():
         'y_data': X_reg_top.iloc[:, 1].tolist(), 'y_data_class': y_reg_transformed.tolist()
     }
     
+    # =========================================================================
+    # PARTE D: GRÁFICA 3 - Reales vs Predichos
+    # =========================================================================
     y_pred_reg_transf = model_reg.predict(X_test_reg)
     
     fig3, ax3 = plt.subplots(figsize=(10, 8))
@@ -222,7 +232,6 @@ def run_malware_analysis():
     ax3.set_title("Gráfica 3: Valores reales vs. Predicciones (Log Transformados)", fontsize=14)
     ax3.grid(True, linestyle='--', alpha=0.6)
     grafica3_b64 = generar_grafica_base64(fig3)
-
 
     # 3. Preparación de Salida Final
     df_sample_head = df_safe.head(10).to_dict('records') 
@@ -237,9 +246,16 @@ def run_malware_analysis():
 
 # Si ejecutas este archivo directamente, entrenas y guardas los modelos
 if __name__ == '__main__':
-    # ... (El código de ejecución local se mantiene) ...
-    # Asegúrate de usar el path local para el CSV
-    file_path = CSV_FILENAME
-    # ...
-    # ...
+    # Carga de Datos inicial para el entrenamiento local
+    file_path = CSV_FILENAME # Path local, asume que se ejecuta desde la raíz o dentro de analysis
+    df = pd.read_csv(file_path)
+    df.columns = df.columns.str.strip()
+    df.columns = [col.replace("calss", "Class") for col in df.columns] 
+    df_safe = df.copy()
+    
+    for col in df_safe.columns:
+        if col != 'Class' and col != 'calss':
+            df_safe[col] = pd.to_numeric(df_safe[col], errors='coerce') 
+    df_safe.replace([np.inf, -np.inf, np.nan], 0, inplace=True)
+    
     train_and_save_models(df_safe)
