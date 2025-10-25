@@ -1,4 +1,3 @@
-
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import f1_score
@@ -12,46 +11,75 @@ import io
 import base64
 import matplotlib
 import joblib 
-# ¡IMPORTANTE! Necesitamos settings de Django para la ruta absoluta
 from django.conf import settings 
 
 # CORRECCIÓN: Usar backend no interactivo para servidores
 matplotlib.use('Agg')
 plt.style.use('default') 
 
-# Nombres de archivos. IMPORTANTE: Asumimos que están en la raíz del proyecto.
-# Si los moviste a la carpeta 'analysis', ajusta la ruta en la función run_malware_analysis.
+# --- NOMBRES DE ARCHIVOS ---
 MODEL_F1_FILENAME = 'model_f1.joblib'
 MODEL_REG_FILENAME = 'model_reg.joblib'
 MODEL_SVM_FILENAME = 'model_svm.joblib'
 LE_CLAS_FILENAME = 'le_clas.joblib'
 CSV_FILENAME = 'TotalFeatures-ISCXFlowMeter.csv'
 
+# --- RUTAS ---
+# Si tu CSV está dentro de 'analysis/', ajusta la ruta aquí. 
+# ASUMIMOS QUE CSV ESTÁ EN 'analysis/' y MODELOS EN LA RAÍZ (junto a manage.py).
+CSV_FILE_PATH = os.path.join(settings.BASE_DIR, 'analysis', CSV_FILENAME)
+
+# ASUMIMOS MODELOS EN LA RAÍZ:
+MODEL_F1_PATH = os.path.join(settings.BASE_DIR, MODEL_F1_FILENAME)
+MODEL_REG_PATH = os.path.join(settings.BASE_DIR, MODEL_REG_FILENAME)
+MODEL_SVM_PATH = os.path.join(settings.BASE_DIR, MODEL_SVM_FILENAME)
+LE_CLAS_PATH = os.path.join(settings.BASE_DIR, LE_CLAS_FILENAME)
+
+
+# --------------------------------------------------------------------
+# *** CARGA GLOBAL DE DATOS Y MODELOS (Optimización de Memoria) ***
+# --------------------------------------------------------------------
+
+# Inicializar variables globales para los modelos y datos
+GLOBAL_DF = None
+GLOBAL_MODEL_F1 = None
+GLOBAL_MODEL_REG = None
+GLOBAL_MODEL_CLAS = None
+GLOBAL_LE_CLAS = None
+
+try:
+    # Carga del DataFrame
+    df_temp = pd.read_csv(CSV_FILE_PATH)
+    
+    # Preprocesamiento inicial (para datos globales)
+    df_temp.columns = df_temp.columns.str.strip()
+    df_temp.columns = [col.replace("calss", "Class") for col in df_temp.columns] 
+    for col in df_temp.columns:
+        if col not in ['Class', 'calss']:
+            df_temp[col] = pd.to_numeric(df_temp[col], errors='coerce') 
+    df_temp.replace([np.inf, -np.inf, np.nan], 0, inplace=True)
+    GLOBAL_DF = df_temp
+    
+    # Carga de Modelos
+    GLOBAL_MODEL_F1 = joblib.load(MODEL_F1_PATH)
+    GLOBAL_MODEL_REG = joblib.load(MODEL_REG_PATH)
+    GLOBAL_MODEL_CLAS = joblib.load(MODEL_SVM_PATH)
+    GLOBAL_LE_CLAS = joblib.load(LE_CLAS_PATH)
+    
+    print("Recursos de ML cargados exitosamente de forma global.")
+
+except FileNotFoundError:
+    print("ERROR FATAL: Archivos de ML (CSV o Modelos) no encontrados en el PATH.")
+except Exception as e:
+    print(f"ERROR FATAL: Fallo al cargar recursos debido a: {e}")
+    
+
 # -------------------------------------------------------------------------
 # FUNCIÓN DE ENTRENAMIENTO Y GUARDADO (EJECUCIÓN LOCAL SOLAMENTE)
 # -------------------------------------------------------------------------
 
-# NOTA: Los paths en esta función SÓLO son relevantes si entrenas localmente.
-# Asumo que train_and_save_models se ejecuta desde la raíz o que los paths
-# de guardado ('model_f1.joblib', etc.) están configurados para guardar
-# en la raíz (junto a manage.py) para que Render los encuentre.
+# ... (Mantener la función train_and_save_models sin cambios, ya que solo es local) ...
 
-def train_and_save_models(df_safe):
-    """Entrena y guarda los modelos necesarios para la aplicación."""
-    # ... (El código de entrenamiento sigue igual) ...
-    # Asegúrate que las líneas joblib.dump usen solo el nombre del archivo
-    # si se supone que se guardan en la raíz desde donde se ejecuta el script.
-    
-    # Ejemplo de guardado:
-    joblib.dump(model_f1, MODEL_F1_FILENAME)
-    print(f"Modelo F1 guardado en {MODEL_F1_FILENAME}")
-    
-    # ... (resto de train_and_save_models) ...
-
-
-# -------------------------------------------------------------------------
-# FUNCIÓN DE EJECUCIÓN (USADA POR DJANGO EN RENDER)
-# -------------------------------------------------------------------------
 
 # Función auxiliar para convertir gráficas a base64 (Asumo que existe)
 def generar_grafica_base64(fig):
@@ -63,61 +91,39 @@ def generar_grafica_base64(fig):
     plt.close(fig)
     return img_b64
 
-def run_malware_analysis():
-    """Carga modelos y genera los datos y gráficas requeridos."""
-    
-    # 1. Carga de Datos y Preprocesamiento
-    
-    # *** CORRECCIÓN CRUCIAL: Usar settings.BASE_DIR para ruta absoluta ***
-    # Esto garantiza que Python encuentre el archivo CSV descargado por Git LFS.
-    csv_file_path = os.path.join(settings.BASE_DIR, 'analysis', CSV_FILENAME)
+# -------------------------------------------------------------------------
+# FUNCIÓN DE EJECUCIÓN (USADA POR DJANGO EN RENDER)
+# -------------------------------------------------------------------------
 
-    try:
-        df = pd.read_csv(csv_file_path)
-    except FileNotFoundError:
+def run_malware_analysis():
+    """Usa los modelos y datos cargados globalmente y genera resultados."""
+    
+    # 1. Comprobación de recursos globales
+    if GLOBAL_DF is None or GLOBAL_MODEL_F1 is None:
         return { 
-            'error': f"Archivo no encontrado: {csv_file_path}. Verifique la ubicación y el estado de Git LFS.", 
+            'error': f"ERROR: Recursos de ML no cargados. Posiblemente por 'Archivo no encontrado' ({CSV_FILE_PATH}) o 'Memoria Insuficiente' durante el arranque del servidor.", 
             'accuracy': 0.0, 
             'dataframe': [] 
         }
 
-    # ... (Preprocesamiento y limpieza del DataFrame, sin cambios)
-    df.columns = df.columns.str.strip()
-    df.columns = [col.replace("calss", "Class") for col in df.columns] 
-    df_safe = df.copy()
-    for col in df_safe.columns:
-        if col != 'Class' and col != 'calss':
-            df_safe[col] = pd.to_numeric(df_safe[col], errors='coerce') 
-    df_safe.replace([np.inf, -np.inf, np.nan], 0, inplace=True)
-    
+    # Usar los recursos globales
+    df_safe = GLOBAL_DF.copy()
+    model_f1 = GLOBAL_MODEL_F1
+    model_reg = GLOBAL_MODEL_REG
+    model_clas = GLOBAL_MODEL_CLAS
+    le_clas = GLOBAL_LE_CLAS
+
+    # 2. Preprocesamiento de datos (solo de variables globales)
     target_col_cls = 'Class' if 'Class' in df_safe.columns else 'calss'
     features_cls_all = ['duration', 'total_fpackets', 'total_bpktl', 'min_fpktl', 'mean_fiat', 'flowPktsPerSecond', 'min_active', 'mean_active', 'Init_Win_bytes_forward']
     df_sample = df_safe.sample(frac=0.1, random_state=42)
     class_counts = df_safe[target_col_cls].value_counts()
 
 
-    # 2. Carga de Modelos y Ejecución de ML
-
-    try:
-        # *** CORRECCIÓN CRUCIAL: Cargar modelos usando settings.BASE_DIR ***
-        model_f1 = joblib.load(os.path.join(settings.BASE_DIR, MODEL_F1_FILENAME))
-        model_reg = joblib.load(os.path.join(settings.BASE_DIR, MODEL_REG_FILENAME))
-        model_clas = joblib.load(os.path.join(settings.BASE_DIR, MODEL_SVM_FILENAME))
-        le_clas = joblib.load(os.path.join(settings.BASE_DIR, LE_CLAS_FILENAME))
-    except FileNotFoundError:
-        # Devuelve la ruta donde se buscó el primer modelo para el debugging
-        model_f1 = joblib.load(os.path.join(settings.BASE_DIR, 'analysis', MODEL_F1_FILENAME))
-        return { 
-            'error': f"Modelos ML no encontrados. Buscados en: {debug_path}", 
-            'accuracy': 0.0, 
-            'dataframe': [] 
-        }
-
-
     # =========================================================================
     # PARTE A: CLASIFICACIÓN BINARIA (Calculo F1-Score)
     # =========================================================================
-    # ... (Todo el código de ML y generación de resultados/gráficas es el mismo)
+    # ... (El código aquí sigue usando model_f1, df_safe, etc. SIN CAMBIOS)
     top_2_classes = class_counts.index[:2].tolist()
     df_filtered_cls_f1 = df_safe[df_safe[target_col_cls].isin(top_2_classes)].copy()
     class_map = {top_2_classes[0]: 0, top_2_classes[1]: 1} 
@@ -129,22 +135,25 @@ def run_malware_analysis():
     
     # Crear y usar el Scaler
     scaler_f1 = StandardScaler()
-    scaler_f1.fit(X_train_f1) # Volvemos a fitear solo el scaler
+    scaler_f1.fit(X_train_f1) 
     X_test_scaled_f1 = scaler_f1.transform(X_test_f1)
     
-    y_pred_f1 = model_f1.predict(X_test_scaled_f1) # Usar modelo CARGADO
+    y_pred_f1 = model_f1.predict(X_test_scaled_f1) 
     f1 = f1_score(y_test_f1, y_pred_f1, average='binary') 
     f1_rounded = round(f1, 4)
 
     # =========================================================================
-    # PARTE B: GRÁFICA 1 - Clasificación SVM
+    # PARTE B, C, D: Gráficas
     # =========================================================================
+    # ... (El resto del código de gráficas y regresión sigue siendo el mismo, 
+    # utilizando las variables globales model_clas, model_reg, y le_clas) ...
+    
     top_3_classes = class_counts.index[:3].tolist()
     df_filtered_svm = df_sample[df_sample[target_col_cls].isin(top_3_classes)].copy()
     X_clas_filt = df_filtered_svm[['min_flowpktl', 'flow_fin']].copy()
     X_clas_filt['min_flowpktl'] = np.log1p(X_clas_filt['min_flowpktl'])
     X_clas_filt['flow_fin'] = np.log1p(X_clas_filt['flow_fin'])
-    y_clas_encoded = le_clas.transform(df_filtered_svm[target_col_cls]) # Usar transform
+    y_clas_encoded = le_clas.transform(df_filtered_svm[target_col_cls]) 
 
     x_min, x_max = X_clas_filt.iloc[:, 0].min() - 0.1, X_clas_filt.iloc[:, 0].max() + 0.1
     y_min, y_max = X_clas_filt.iloc[:, 1].min() - 0.1, X_clas_filt.iloc[:, 1].max() + 0.1
@@ -167,9 +176,6 @@ def run_malware_analysis():
     ax1.grid(True, linestyle='--', alpha=0.6)
     grafica1_b64 = generar_grafica_base64(fig1)
 
-    # =========================================================================
-    # PARTE C: GRÁFICA 2 - Superficie de Predicción 
-    # =========================================================================
     y_reg_original = df_sample['Init_Win_bytes_forward'].copy()
     y_reg_original[y_reg_original < 0] = 0
     y_reg_original.replace([np.inf, -np.inf, np.nan], 0, inplace=True) 
@@ -195,7 +201,7 @@ def run_malware_analysis():
     grid_data = pd.DataFrame(np.c_[xx_r.ravel(), yy_r.ravel()], columns=top_2_features)
     grid_data.replace([np.inf, -np.inf], 0, inplace=True) 
 
-    Z_reg = model_reg.predict(grid_data) # Usar modelo CARGADO
+    Z_reg = model_reg.predict(grid_data) 
 
     regression_data_surface = {
         'x_feature': top_2_features[0], 'y_feature': top_2_features[1],
@@ -204,9 +210,6 @@ def run_malware_analysis():
         'y_data': X_reg_top.iloc[:, 1].tolist(), 'y_data_class': y_reg_transformed.tolist()
     }
     
-    # =========================================================================
-    # PARTE D: GRÁFICA 3 - Reales vs Predichos
-    # =========================================================================
     y_pred_reg_transf = model_reg.predict(X_test_reg)
     
     fig3, ax3 = plt.subplots(figsize=(10, 8))
@@ -219,6 +222,7 @@ def run_malware_analysis():
     ax3.set_title("Gráfica 3: Valores reales vs. Predicciones (Log Transformados)", fontsize=14)
     ax3.grid(True, linestyle='--', alpha=0.6)
     grafica3_b64 = generar_grafica_base64(fig3)
+
 
     # 3. Preparación de Salida Final
     df_sample_head = df_safe.head(10).to_dict('records') 
@@ -233,16 +237,9 @@ def run_malware_analysis():
 
 # Si ejecutas este archivo directamente, entrenas y guardas los modelos
 if __name__ == '__main__':
-    # Carga de Datos inicial para el entrenamiento local
-    file_path = CSV_FILENAME # No es necesario el path absoluto para la ejecución local
-    df = pd.read_csv(file_path)
-    df.columns = df.columns.str.strip()
-    df.columns = [col.replace("calss", "Class") for col in df.columns] 
-    df_safe = df.copy()
-    
-    for col in df_safe.columns:
-        if col != 'Class' and col != 'calss':
-            df_safe[col] = pd.to_numeric(df_safe[col], errors='coerce') 
-    df_safe.replace([np.inf, -np.inf, np.nan], 0, inplace=True)
-    
+    # ... (El código de ejecución local se mantiene) ...
+    # Asegúrate de usar el path local para el CSV
+    file_path = CSV_FILENAME
+    # ...
+    # ...
     train_and_save_models(df_safe)
