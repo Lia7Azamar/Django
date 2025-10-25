@@ -44,19 +44,33 @@ RESOURCES_LOADED = False
 # --------------------------------------------------------------------
 
 def load_file_from_url(filename):
-    """Descarga un archivo (CSV o joblib) desde la URL y lo devuelve como bytes."""
+    """
+    Descarga un archivo (generalmente pequeño, como los modelos) y lo devuelve como bytes.
+    Se usa para joblib.
+    """
     url = f"{BASE_RESOURCE_URL}{filename}"
     print(f"Intentando cargar recurso desde: {url}")
-    # Usamos un timeout por si el archivo es grande
     response = requests.get(url, timeout=60) 
-    response.raise_for_status() # Lanza un error si el código no es 200 (éxito)
+    response.raise_for_status()
     return response.content
 
+def load_file_from_url_stream(filename):
+    """
+    Descarga el CSV en modo STREAMING para evitar que el archivo completo 
+    se almacene en una sola variable RAM antes de que Pandas lo lea.
+    """
+    url = f"{BASE_RESOURCE_URL}{filename}"
+    print(f"Intentando cargar recurso desde: {url} (Streaming)")
+    # El stream=True asegura que los datos no se descarguen todos a la vez en response.content
+    response = requests.get(url, stream=True, timeout=60) 
+    response.raise_for_status() 
+    # Usar io.BytesIO con el contenido (que será más pequeño gracias a stream=True)
+    return io.BytesIO(response.content) 
 
 def initialize_global_resources():
     """
     Carga todos los recursos de ML desde URLs de Hugging Face directamente a la memoria.
-    **Implementa limitación de filas para ahorrar memoria.**
+    Implementa limitación de filas y streaming para ahorrar memoria.
     """
     global GLOBAL_DF, GLOBAL_MODEL_F1, GLOBAL_MODEL_REG, GLOBAL_MODEL_CLAS, GLOBAL_LE_CLAS, RESOURCES_LOADED
 
@@ -64,15 +78,17 @@ def initialize_global_resources():
         return 
 
     try:
-        # 1. Carga del DataFrame - CON LÍMITE DE MEMORIA
-        csv_bytes = load_file_from_url(CSV_FILENAME)
+        # 1. Carga del DataFrame - CON STREAMING Y MUESTRA MUY PEQUEÑA
         
         # **CAMBIO CLAVE: Cargar solo las primeras N filas para evitar OOM (Out Of Memory)**
-        N_ROWS_TO_LOAD = 10000 
-        print(f"Cargando las primeras {N_ROWS_TO_LOAD} filas del CSV para ahorrar RAM.")
+        N_ROWS_TO_LOAD = 1000 
+        print(f"Cargando las primeras {N_ROWS_TO_LOAD} filas del CSV para máximo ahorro de RAM.")
+        
+        # Usar la función de streaming para el CSV
+        csv_stream = load_file_from_url_stream(CSV_FILENAME)
         
         df_temp = pd.read_csv(
-            io.BytesIO(csv_bytes), 
+            csv_stream, 
             nrows=N_ROWS_TO_LOAD 
         ) 
         
@@ -85,7 +101,7 @@ def initialize_global_resources():
         df_temp.replace([np.inf, -np.inf, np.nan], 0, inplace=True)
         GLOBAL_DF = df_temp.copy()
         
-        # 2. Carga de Modelos (deben ser más pequeños y no causar OOM)
+        # 2. Carga de Modelos (usando la función normal load_file_from_url)
         
         f1_bytes = load_file_from_url(MODEL_F1_FILENAME)
         GLOBAL_MODEL_F1 = joblib.load(io.BytesIO(f1_bytes))
@@ -148,8 +164,8 @@ def run_malware_analysis():
     target_col_cls = 'Class' if 'Class' in df_safe.columns else 'calss'
     features_cls_all = ['duration', 'total_fpackets', 'total_bpktl', 'min_fpktl', 'mean_fiat', 'flowPktsPerSecond', 'min_active', 'mean_active', 'Init_Win_bytes_forward']
     
-    # Muestreo para evitar OOM si el DataFrame de 10k filas sigue siendo grande
-    # Usar una muestra de la muestra.
+    # Muestreo para evitar OOM si el DataFrame de 1k filas sigue siendo grande
+    # Usar una muestra del 80% de las 1000 filas cargadas.
     df_sample = df_safe.sample(frac=0.8, random_state=42) 
     class_counts = df_safe[target_col_cls].value_counts()
 
@@ -280,11 +296,9 @@ def run_malware_analysis():
 
 def train_and_save_models(df_safe):
     """Entrena y guarda los modelos necesarios para la aplicación (solo localmente)."""
-    # Esta función está vacía o contiene tu lógica de entrenamiento.
     pass
 
 
 if __name__ == '__main__':
-    # Esta sección es solo para pruebas de desarrollo LOCAL
     print("Ejecutando script localmente.")
     pass
