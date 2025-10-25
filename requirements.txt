@@ -11,3 +11,4 @@ matplotlib
 joblib
 djangorestframework
 requests
+huggingface_hub

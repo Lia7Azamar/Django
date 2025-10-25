@@ -2,8 +2,6 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import f1_score
 from sklearn.preprocessing import StandardScaler, LabelEncoder
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.svm import SVC
 import numpy as np
 import os
 import matplotlib.pyplot as plt
@@ -11,35 +9,35 @@ import io
 import base64
 import matplotlib
 import joblib 
+# Importar la librería necesaria para Hugging Face
+from huggingface_hub import hf_hub_download 
 from django.conf import settings 
 
 # CORRECCIÓN: Usar backend no interactivo para servidores
 matplotlib.use('Agg')
 plt.style.use('default') 
 
-# --- NOMBRES DE ARCHIVOS ---
+# --- CONFIGURACIÓN DE HUGGING FACE ---
+# REPO ID CORREGIDO USANDO LA URL PROPORCIONADA
+HF_REPO_ID = "Lia896gh/csv" 
+
+# --- NOMBRES DE ARCHIVOS EN EL REPOSITORIO DE HF ---
 MODEL_F1_FILENAME = 'model_f1.joblib'
 MODEL_REG_FILENAME = 'model_reg.joblib'
 MODEL_SVM_FILENAME = 'model_svm.joblib'
 LE_CLAS_FILENAME = 'le_clas.joblib'
 CSV_FILENAME = 'TotalFeatures-ISCXFlowMeter.csv'
 
-# Columnas mínimas necesarias (Ajustar si es necesario)
+# Columnas mínimas necesarias para todas las operaciones (clasificación y regresión)
 COLUMNS_NEEDED_FOR_ML = [
     'calss', 'duration', 'total_fpackets', 'total_bpktl', 
     'min_fpktl', 'mean_fiat', 'flowPktsPerSecond', 'min_active', 
     'mean_active', 'Init_Win_bytes_forward', 'min_flowpktl', 'flow_fin'
 ]
 
-# --- RUTAS FINALES: TODAS DENTRO DE LA CARPETA 'analysis' ---
-RESOURCES_DIR = os.path.join(settings.BASE_DIR, 'analysis')
-
-CSV_FILE_PATH = os.path.join(RESOURCES_DIR, CSV_FILENAME)
-MODEL_F1_PATH = os.path.join(RESOURCES_DIR, MODEL_F1_FILENAME)
-# CORRECCIÓN DE SINTAXIS: Usar FILENAME para crear PATH
-MODEL_REG_PATH = os.path.join(RESOURCES_DIR, MODEL_REG_FILENAME) 
-MODEL_SVM_PATH = os.path.join(RESOURCES_DIR, MODEL_SVM_FILENAME)
-LE_CLAS_PATH = os.path.join(RESOURCES_DIR, LE_CLAS_FILENAME)
+# Directorio de caché temporal para los archivos descargados
+RESOURCES_DIR = os.path.join(settings.BASE_DIR, 'hf_cache')
+os.makedirs(RESOURCES_DIR, exist_ok=True)
 
 
 # --------------------------------------------------------------------
@@ -53,6 +51,7 @@ def optimize_dataframe_memory(df):
             c_min = df[col].min()
             c_max = df[col].max()
             
+            # Convertir a INTs más pequeños
             if str(df[col].dtype)[:3] == 'int':
                 if c_min > np.iinfo(np.int8).min and c_max < np.iinfo(np.int8).max:
                     df[col] = df[col].astype(np.int8)
@@ -61,6 +60,7 @@ def optimize_dataframe_memory(df):
                 elif c_min > np.iinfo(np.int32).min and c_max < np.iinfo(np.int32).max:
                     df[col] = df[col].astype(np.int32)    
             
+            # Convertir a FLOATs más pequeños
             elif str(df[col].dtype)[:5] == 'float':
                 if c_min > np.finfo(np.float32).min and c_max < np.finfo(np.float32).max:
                     df[col] = df[col].astype(np.float32)
@@ -68,7 +68,7 @@ def optimize_dataframe_memory(df):
     return df
 
 # --------------------------------------------------------------------
-# *** CARGA GLOBAL DE DATOS Y MODELOS (Optimización de Memoria) ***
+# *** CARGA GLOBAL DE DATOS Y MODELOS DESDE HUGGING FACE ***
 # --------------------------------------------------------------------
 
 # Inicializar variables globales
@@ -79,11 +79,18 @@ GLOBAL_MODEL_CLAS = None
 GLOBAL_LE_CLAS = None
 RESOURCES_LOADED = False
 
+# Función auxiliar para descargar un archivo de Hugging Face
+def download_hf_file(filename):
+    print(f"Descargando {filename} de Hugging Face...")
+    # hf_hub_download maneja el almacenamiento en caché
+    return hf_hub_download(repo_id=HF_REPO_ID, filename=filename, local_dir=RESOURCES_DIR)
+
 try:
-    # Carga con límite de filas y columnas para evitar OOM
+    # 1. DESCARGA Y CARGA DE DATOS (Optimizada para Memoria)
+    CSV_FILE_PATH = download_hf_file(CSV_FILENAME)
     N_ROWS_TO_LOAD = 10000 
     
-    print(f"Cargando las primeras {N_ROWS_TO_LOAD} filas y columnas específicas del CSV desde: {CSV_FILE_PATH}")
+    print(f"Leyendo las primeras {N_ROWS_TO_LOAD} filas y columnas específicas del CSV descargado.")
     
     df_temp = pd.read_csv(
         CSV_FILE_PATH,
@@ -95,30 +102,37 @@ try:
     df_temp.columns = df_temp.columns.str.strip()
     df_temp.columns = [col.replace("calss", "Class") for col in df_temp.columns] 
     
-    target_col_name = 'Class' if 'Class' in df_temp.columns else 'calss' 
+    # Manejo robusto de la columna target
+    target_col_name = 'Class' 
+    if target_col_name not in df_temp.columns:
+         raise ValueError(f"Columna objetivo '{target_col_name}' no encontrada en los datos cargados.")
+
+    # Convertir a numérico y manejar infinitos/NaNs
     for col in df_temp.columns:
         if col != target_col_name:
             df_temp[col] = pd.to_numeric(df_temp[col], errors='coerce') 
     df_temp.replace([np.inf, -np.inf, np.nan], 0, inplace=True)
     
-    # *** APLICAR OPTIMIZACIÓN DE MEMORIA ***
     df_temp = optimize_dataframe_memory(df_temp)
     GLOBAL_DF = df_temp
     
-    # Carga de Modelos
+    # 2. DESCARGA Y CARGA DE MODELOS
+    MODEL_F1_PATH = download_hf_file(MODEL_F1_FILENAME)
+    MODEL_REG_PATH = download_hf_file(MODEL_REG_FILENAME)
+    MODEL_SVM_PATH = download_hf_file(MODEL_SVM_FILENAME)
+    LE_CLAS_PATH = download_hf_file(LE_CLAS_FILENAME)
+
     GLOBAL_MODEL_F1 = joblib.load(MODEL_F1_PATH)
     GLOBAL_MODEL_REG = joblib.load(MODEL_REG_PATH)
     GLOBAL_MODEL_CLAS = joblib.load(MODEL_SVM_PATH)
     GLOBAL_LE_CLAS = joblib.load(LE_CLAS_PATH)
     
     RESOURCES_LOADED = True
-    print("Recursos de ML cargados exitosamente de forma global y optimizados.")
+    print("Recursos de ML cargados exitosamente desde Hugging Face y optimizados.")
 
-except FileNotFoundError:
-    print(f"ERROR FATAL: Archivos de ML no encontrados. Verifique la carpeta: {RESOURCES_DIR}")
 except Exception as e:
-    # Este catch reporta errores como OOM (código 118)
-    print(f"ERROR FATAL: Fallo al cargar recursos debido a: {e}")
+    # Este catch es robusto y reportará cualquier error de conexión, FileNotFoundError, o ValueError
+    print(f"ERROR FATAL: Fallo al cargar recursos desde HugGING FACE debido a: {e}")
     
 
 # Función auxiliar para convertir gráficas a base64
@@ -141,7 +155,7 @@ def run_malware_analysis():
     # 1. Comprobación de recursos globales
     if GLOBAL_DF is None or GLOBAL_MODEL_F1 is None or not RESOURCES_LOADED:
         return { 
-            'error': "ERROR: Recursos de ML no cargados. El servidor falló en la inicialización.", 
+            'error': "ERROR: Recursos de ML no cargados. El servidor falló en la inicialización o Hugging Face no fue accesible. Verifique los logs.", 
             'accuracy': 0.0, 
             'dataframe': [] 
         }
@@ -168,12 +182,12 @@ def run_malware_analysis():
     regression_data_surface = {}
     
     # =========================================================================
-    # PARTE A: CLASIFICACIÓN BINARIA (Calculo F1-Score)
+    # PARTE A: CLASIFICACIÓN BINARIA (Calculo F1-Score) - A PRUEBA DE FALLOS DE CLASES
     # =========================================================================
     
     if len(class_counts) < 2:
         return { 
-            'error': f"Error ML: La muestra cargada ({N_ROWS_TO_LOAD} filas) solo tiene {len(class_counts)} clases únicas. Se requieren al menos 2 para F1. Revise la diversidad de los datos.", 
+            'error': f"Error ML: La muestra cargada ({len(df_safe)} filas) solo tiene {len(class_counts)} clases únicas. Se requieren al menos 2 para F1.", 
             'accuracy': 0.0, 
             'dataframe': df_safe.head(10).to_dict('records') 
         }
@@ -194,12 +208,15 @@ def run_malware_analysis():
     
     # Escalar y Predecir
     scaler_f1 = StandardScaler()
-    scaler_f1.fit(X_train_f1) 
-    X_test_scaled_f1 = scaler_f1.transform(X_test_f1)
-    
-    y_pred_f1 = model_f1.predict(X_test_scaled_f1) 
-    f1 = f1_score(y_test_f1, y_pred_f1, average='binary') 
-    f1_rounded = round(f1, 4)
+    if X_train_f1.empty:
+         print("ADVERTENCIA: X_train_f1 está vacío, saltando cálculo de F1.")
+    else:
+        scaler_f1.fit(X_train_f1) 
+        X_test_scaled_f1 = scaler_f1.transform(X_test_f1)
+        
+        y_pred_f1 = model_f1.predict(X_test_scaled_f1) 
+        f1 = f1_score(y_test_f1, y_pred_f1, average='binary') 
+        f1_rounded = round(f1, 4)
 
     # =========================================================================
     # PARTE B: GRÁFICA 1 - Clasificación SVM
@@ -208,7 +225,7 @@ def run_malware_analysis():
     required_svm_features = ['min_flowpktl', 'flow_fin']
     
     if not all(f in df_safe.columns for f in required_svm_features) or len(class_counts) < 3:
-        print("ADVERTENCIA: Saltando Gráfica 1 (SVM) por insuficiencia de datos/clases.")
+        print("ADVERTENCIA: Saltando Gráfica 1 (SVM) por insuficiencia de datos/clases/columnas.")
     else:
         top_3_classes = class_counts.index[:3].tolist()
         df_filtered_svm = df_sample[df_sample[target_col_cls].isin(top_3_classes)].copy()
@@ -259,6 +276,7 @@ def run_malware_analysis():
     if len(X_reg.columns) < 2:
         print("ADVERTENCIA: Saltando Gráfica 2 y 3, no hay suficientes columnas para X_reg.")
     else:
+        # Aquí se asume que model_reg es un RandomForestRegressor con feature_importances_
         feature_importances = pd.Series(model_reg.feature_importances_, index=X_reg.columns)
         top_2_features = feature_importances.nlargest(2).index.tolist()
         
