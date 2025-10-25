@@ -11,7 +11,6 @@ import io
 import base64
 import matplotlib
 import joblib 
-# Importar requests ya no es necesario si cargas localmente
 from django.conf import settings 
 
 # CORRECCIÓN: Usar backend no interactivo para servidores
@@ -25,12 +24,20 @@ MODEL_SVM_FILENAME = 'model_svm.joblib'
 LE_CLAS_FILENAME = 'le_clas.joblib'
 CSV_FILENAME = 'TotalFeatures-ISCXFlowMeter.csv'
 
+# Columnas mínimas necesarias (Ajustar si es necesario)
+COLUMNS_NEEDED_FOR_ML = [
+    'calss', 'duration', 'total_fpackets', 'total_bpktl', 
+    'min_fpktl', 'mean_fiat', 'flowPktsPerSecond', 'min_active', 
+    'mean_active', 'Init_Win_bytes_forward', 'min_flowpktl', 'flow_fin'
+]
+
 # --- RUTAS FINALES: TODAS DENTRO DE LA CARPETA 'analysis' ---
 RESOURCES_DIR = os.path.join(settings.BASE_DIR, 'analysis')
 
 CSV_FILE_PATH = os.path.join(RESOURCES_DIR, CSV_FILENAME)
 MODEL_F1_PATH = os.path.join(RESOURCES_DIR, MODEL_F1_FILENAME)
-MODEL_REG_PATH = os.path.join(RESOURCES_DIR, MODEL_REG_FILENAME)
+# CORRECCIÓN DE SINTAXIS: Usar FILENAME para crear PATH
+MODEL_REG_PATH = os.path.join(RESOURCES_DIR, MODEL_REG_FILENAME) 
 MODEL_SVM_PATH = os.path.join(RESOURCES_DIR, MODEL_SVM_FILENAME)
 LE_CLAS_PATH = os.path.join(RESOURCES_DIR, LE_CLAS_FILENAME)
 
@@ -42,14 +49,11 @@ LE_CLAS_PATH = os.path.join(RESOURCES_DIR, LE_CLAS_FILENAME)
 def optimize_dataframe_memory(df):
     """Reduce el uso de memoria de un DataFrame ajustando los tipos de datos."""
     for col in df.columns:
-        col_type = df[col].dtype
-
-        if col_type != object:
+        if df[col].dtype != object:
             c_min = df[col].min()
             c_max = df[col].max()
             
-            # Convertir a INTs más pequeños
-            if str(col_type)[:3] == 'int':
+            if str(df[col].dtype)[:3] == 'int':
                 if c_min > np.iinfo(np.int8).min and c_max < np.iinfo(np.int8).max:
                     df[col] = df[col].astype(np.int8)
                 elif c_min > np.iinfo(np.int16).min and c_max < np.iinfo(np.int16).max:
@@ -57,8 +61,7 @@ def optimize_dataframe_memory(df):
                 elif c_min > np.iinfo(np.int32).min and c_max < np.iinfo(np.int32).max:
                     df[col] = df[col].astype(np.int32)    
             
-            # Convertir a FLOATs más pequeños (de float64 a float32)
-            else:
+            elif str(df[col].dtype)[:5] == 'float':
                 if c_min > np.finfo(np.float32).min and c_max < np.finfo(np.float32).max:
                     df[col] = df[col].astype(np.float32)
     
@@ -74,18 +77,27 @@ GLOBAL_MODEL_F1 = None
 GLOBAL_MODEL_REG = None
 GLOBAL_MODEL_CLAS = None
 GLOBAL_LE_CLAS = None
-RESOURCES_LOADED = False # Añadir flag de carga global para control de Gunicorn
+RESOURCES_LOADED = False
 
 try:
-    # Carga del DataFrame COMPLETO (sin limitación de 200 filas)
-    print(f"Cargando dataset COMPLETO desde: {CSV_FILE_PATH}")
-    df_temp = pd.read_csv(CSV_FILE_PATH)
+    # Carga con límite de filas y columnas para evitar OOM
+    N_ROWS_TO_LOAD = 10000 
+    
+    print(f"Cargando las primeras {N_ROWS_TO_LOAD} filas y columnas específicas del CSV desde: {CSV_FILE_PATH}")
+    
+    df_temp = pd.read_csv(
+        CSV_FILE_PATH,
+        nrows=N_ROWS_TO_LOAD,
+        usecols=COLUMNS_NEEDED_FOR_ML 
+    ) 
     
     # Preprocesamiento inicial
     df_temp.columns = df_temp.columns.str.strip()
     df_temp.columns = [col.replace("calss", "Class") for col in df_temp.columns] 
+    
+    target_col_name = 'Class' if 'Class' in df_temp.columns else 'calss' 
     for col in df_temp.columns:
-        if col not in ['Class', 'calss']:
+        if col != target_col_name:
             df_temp[col] = pd.to_numeric(df_temp[col], errors='coerce') 
     df_temp.replace([np.inf, -np.inf, np.nan], 0, inplace=True)
     
@@ -105,6 +117,7 @@ try:
 except FileNotFoundError:
     print(f"ERROR FATAL: Archivos de ML no encontrados. Verifique la carpeta: {RESOURCES_DIR}")
 except Exception as e:
+    # Este catch reporta errores como OOM (código 118)
     print(f"ERROR FATAL: Fallo al cargar recursos debido a: {e}")
     
 
@@ -128,7 +141,7 @@ def run_malware_analysis():
     # 1. Comprobación de recursos globales
     if GLOBAL_DF is None or GLOBAL_MODEL_F1 is None or not RESOURCES_LOADED:
         return { 
-            'error': f"ERROR: Recursos de ML no cargados. Verifique que los archivos estén en {RESOURCES_DIR}.", 
+            'error': "ERROR: Recursos de ML no cargados. El servidor falló en la inicialización.", 
             'accuracy': 0.0, 
             'dataframe': [] 
         }
@@ -144,19 +157,23 @@ def run_malware_analysis():
     target_col_cls = 'Class' 
     features_cls_all = ['duration', 'total_fpackets', 'total_bpktl', 'min_fpktl', 'mean_fiat', 'flowPktsPerSecond', 'min_active', 'mean_active', 'Init_Win_bytes_forward']
     
-    # Muestreo al 10% del DF COMPLETO
+    # Muestreo al 10% de las 10,000 filas cargadas
     df_sample = df_safe.sample(frac=0.1, random_state=42)
     class_counts = df_safe[target_col_cls].value_counts()
-    f1_rounded = 0.0 # Inicializar F1-Score
-
+    f1_rounded = 0.0 
+    
+    # Inicializar las variables de salida en caso de que las secciones se salten
+    grafica1_b64 = None
+    grafica3_b64 = None
+    regression_data_surface = {}
+    
     # =========================================================================
     # PARTE A: CLASIFICACIÓN BINARIA (Calculo F1-Score)
     # =========================================================================
     
-    # *** ESTA VERIFICACIÓN YA NO DEBERÍA FALLAR CON EL DF COMPLETO ***
     if len(class_counts) < 2:
         return { 
-            'error': f"Error ML: La muestra (DF Completo) solo tiene {len(class_counts)} clases. Revise el dataset.", 
+            'error': f"Error ML: La muestra cargada ({N_ROWS_TO_LOAD} filas) solo tiene {len(class_counts)} clases únicas. Se requieren al menos 2 para F1. Revise la diversidad de los datos.", 
             'accuracy': 0.0, 
             'dataframe': df_safe.head(10).to_dict('records') 
         }
@@ -190,30 +207,20 @@ def run_malware_analysis():
     
     required_svm_features = ['min_flowpktl', 'flow_fin']
     
-    # Se usa len(class_counts) >= 3 ahora que cargamos el DF completo.
-    if not all(f in df_safe.columns for f in required_svm_features):
-        grafica1_b64 = None
-        print("ADVERTENCIA: Saltando Gráfica 1, faltan features de SVM.")
-    elif len(class_counts) < 3:
-        grafica1_b64 = None
-        print(f"ADVERTENCIA: Saltando Gráfica 1, solo hay {len(class_counts)} clases (se requieren 3).")
+    if not all(f in df_safe.columns for f in required_svm_features) or len(class_counts) < 3:
+        print("ADVERTENCIA: Saltando Gráfica 1 (SVM) por insuficiencia de datos/clases.")
     else:
         top_3_classes = class_counts.index[:3].tolist()
         df_filtered_svm = df_sample[df_sample[target_col_cls].isin(top_3_classes)].copy()
         X_clas_filt = df_filtered_svm[required_svm_features].copy()
         
-        # Lógica de transformación y predicción
         X_clas_filt['min_flowpktl'] = np.log1p(X_clas_filt['min_flowpktl'])
         X_clas_filt['flow_fin'] = np.log1p(X_clas_filt['flow_fin'])
         
-        # Asegúrate de que LabelEncoder puede transformar los datos
         try:
              y_clas_encoded = le_clas.transform(df_filtered_svm[target_col_cls]) 
         except ValueError:
-             # Si una clase en df_filtered_svm no está en el LE, salta
-             grafica1_b64 = None
              print("ADVERTENCIA: Saltando Gráfica 1, LabelEncoder no reconoce las clases en la muestra.")
-             pass
         else:
              x_min, x_max = X_clas_filt.iloc[:, 0].min() - 0.1, X_clas_filt.iloc[:, 0].max() + 0.1
              y_min, y_max = X_clas_filt.iloc[:, 1].min() - 0.1, X_clas_filt.iloc[:, 1].max() + 0.1
@@ -238,12 +245,8 @@ def run_malware_analysis():
              ax1.grid(True, linestyle='--', alpha=0.6)
              grafica1_b64 = generar_grafica_base64(fig1)
 
-    # ... (El resto del código para Gráfica 2 y 3 no tiene cambios críticos) ...
-    # (Se asume que las variables gráfica3_b64 y regression_data_surface se definen
-    # en las secciones C y D si no se saltan)
-
     # =========================================================================
-    # PARTE C: GRÁFICA 2 - Superficie de Predicción 
+    # PARTES C & D: REGRESIÓN (Gráficas 2 y 3)
     # =========================================================================
     
     y_reg_original = df_sample['Init_Win_bytes_forward'].copy()
@@ -253,31 +256,22 @@ def run_malware_analysis():
     X_reg = df_sample.drop(['Init_Win_bytes_forward', target_col_cls], axis=1, errors='ignore')
     X_reg.replace([np.inf, -np.inf], 0, inplace=True) 
     
-    regression_data_surface = None
-    grafica3_b64 = None
-    
-    # --- VERIFICACIÓN CRÍTICA 3: Suficientes Features para Regresión ---
     if len(X_reg.columns) < 2:
         print("ADVERTENCIA: Saltando Gráfica 2 y 3, no hay suficientes columnas para X_reg.")
     else:
-        # Lógica para obtener las 2 features más importantes
         feature_importances = pd.Series(model_reg.feature_importances_, index=X_reg.columns)
         top_2_features = feature_importances.nlargest(2).index.tolist()
         
-        # Respaldo si no hay 2 importancias (aunque ya hay 2 features)
         if len(top_2_features) < 2:
             top_2_features = X_reg.columns[:2].tolist()
 
         X_reg_top = X_reg[top_2_features]
         X_reg_top.replace([np.inf, -np.inf], 0, inplace=True)
         
-        # Split para el test set de Regresión
         X_train_reg, X_test_reg, y_train_reg_transf, y_test_reg_transf = train_test_split(
             X_reg_top, y_reg_transformed, test_size=0.3, random_state=42
         )
-        # ... (Resto de la lógica de Gráfica 2 y 3) ...
         
-        # Creación de la malla para la superficie de predicción (Gráfica 2)
         x_min_r, x_max_r = X_reg_top.iloc[:, 0].min() - 0.5, X_reg_top.iloc[:, 0].max() + 0.5
         y_min_r, y_max_r = X_reg_top.iloc[:, 1].min() - 0.5, X_reg_top.iloc[:, 1].max() + 0.5
         xx_r, yy_r = np.meshgrid(np.linspace(x_min_r, x_max_r, 50), np.linspace(y_min_r, y_max_r, 50))
@@ -293,9 +287,6 @@ def run_malware_analysis():
             'y_data': X_reg_top.iloc[:, 1].tolist(), 'y_data_class': y_reg_transformed.tolist()
         }
         
-        # =========================================================================
-        # PARTE D: GRÁFICA 3 - Reales vs Predichos
-        # =========================================================================
         y_pred_reg_transf = model_reg.predict(X_test_reg)
         
         fig3, ax3 = plt.subplots(figsize=(10, 8))
@@ -320,7 +311,6 @@ def run_malware_analysis():
         'regressionData': regression_data_surface
     }
 
-# Si ejecutas este archivo directamente, entrenas y guardas los modelos
+
 if __name__ == '__main__':
-    # ... (El código de train_and_save_models se mantiene fuera del scope del servidor) ...
     pass
