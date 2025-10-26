@@ -51,6 +51,8 @@ def optimize_dataframe_memory(df):
             c_min = df[col].min()
             c_max = df[col].max()
             
+            # (Lógica de optimización de tipos omitida para brevedad, asumiendo que ya está en tu script)
+            # Solo la copiamos para mantener la estructura:
             if str(df[col].dtype)[:3] == 'int':
                 if c_min > np.iinfo(np.int8).min and c_max < np.iinfo(np.int8).max:
                     df[col] = df[col].astype(np.int8)
@@ -100,11 +102,9 @@ try:
     MODEL_SVM_PATH = download_hf_file(MODEL_SVM_FILENAME)
     LE_CLAS_PATH = download_hf_file(LE_CLAS_FILENAME)
 
-    # 1b. Cargar CSV con optimización (Aumento de filas CRÍTICO)
-    N_ROWS_TO_LOAD = 50000  # Mantener en 50,000
+    # 1b. Cargar CSV con optimización (50,000 filas)
+    N_ROWS_TO_LOAD = 50000 
     
-    print(f"Leyendo las primeras {N_ROWS_TO_LOAD} filas y columnas específicas del CSV descargado.")
-
     df_temp = pd.read_csv(
         CSV_FILE_PATH,
         nrows=N_ROWS_TO_LOAD,
@@ -245,8 +245,8 @@ def run_malware_analysis():
              x_min, x_max = X_clas_filt.iloc[:, 0].min() - 0.1, X_clas_filt.iloc[:, 0].max() + 0.1
              y_min, y_max = X_clas_filt.iloc[:, 1].min() - 0.1, X_clas_filt.iloc[:, 1].max() + 0.1
              
-             # CORRECCIÓN CRÍTICA: Reducción de la malla de predicción a 30x30
-             xx, yy = np.meshgrid(np.linspace(x_min, x_max, 30), np.linspace(y_min, y_max, 30)) 
+             # ULTIMA CORRECCIÓN: Reducción de la malla de predicción a 20x20
+             xx, yy = np.meshgrid(np.linspace(x_min, x_max, 20), np.linspace(y_min, y_max, 20)) 
              
              feature_names = X_clas_filt.columns
              grid_data_svc = pd.DataFrame(np.c_[xx.ravel(), yy.ravel()], columns=feature_names) 
@@ -302,8 +302,8 @@ def run_malware_analysis():
         x_min_r, x_max_r = X_reg_top.iloc[:, 0].min() - 0.5, X_reg_top.iloc[:, 0].max() + 0.5
         y_min_r, y_max_r = X_reg_top.iloc[:, 1].min() - 0.5, X_reg_top.iloc[:, 1].max() + 0.5
         
-        # CORRECCIÓN CRÍTICA: Reducción de la malla de predicción a 10x10
-        xx_r, yy_r = np.meshgrid(np.linspace(x_min_r, x_max_r, 10), np.linspace(y_min_r, y_max_r, 10))
+        # ULTIMA CORRECCIÓN: Reducción de la malla de predicción a 5x5
+        xx_r, yy_r = np.meshgrid(np.linspace(x_min_r, x_max_r, 5), np.linspace(y_min_r, y_max_r, 5))
         
         grid_data = pd.DataFrame(np.c_[xx_r.ravel(), yy_r.ravel()], columns=top_2_features)
         grid_data.replace([np.inf, -np.inf], 0, inplace=True) 
