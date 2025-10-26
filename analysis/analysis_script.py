@@ -31,7 +31,7 @@ ARTEFACTS = {
     'le': 'le_clas.joblib',
     'scaler': 'scaler_f1.joblib' 
 }
-# Eliminamos 'reg' ya que no lo usaremos.
+# Solo se cargan los modelos de Clasificación.
 
 RESOURCES_DIR = os.path.join(settings.BASE_DIR, 'hf_cache')
 os.makedirs(RESOURCES_DIR, exist_ok=True)
@@ -68,7 +68,6 @@ def load_global_resources():
     try:
         print("Iniciando descarga y carga optimizada de ARTEFACTOS...")
         
-        # Solo necesitamos los modelos f1, clas, le y scaler
         for key, filename in ARTEFACTS.items():
             path = download_hf_file(filename)
             GLOBAL_RESOURCES[key] = joblib.load(path)
@@ -152,17 +151,17 @@ def run_malware_analysis():
 
     # =========================================================================
     # PARTE B: GRÁFICA 1 - Clasificación SVM (Muestra de 10 filas)
-    # SOLUCIÓN CRÍTICA: MANEJO DE ÍNDICES OUT OF RANGE
+    # SOLUCIÓN FINAL AL LIST INDEX OUT OF RANGE
     # =========================================================================
     
-    # 1. Obtenemos las clases que el modelo SVM/LabelEncoder conoce
+    # 1. Obtenemos solo las clases que el LabelEncoder (le_clas) conoce
     known_classes = le_clas.classes_.tolist()
     
-    # Filtramos la muestra de 10 filas para solo incluir clases conocidas por el encoder
+    # Filtramos la muestra de 10 filas para solo incluir clases conocidas
     df_filtered_svm = df_sample_10[df_sample_10[TARGET_COL_CLS].isin(known_classes)].copy()
     
-    # Si la muestra es muy pequeña, regresamos una gráfica de fallback.
-    if df_filtered_svm.empty or len(df_filtered_svm) < 2:
+    # Manejo de fallback si la muestra es demasiado pequeña o solo tiene 1 clase.
+    if df_filtered_svm.empty or len(df_filtered_svm[TARGET_COL_CLS].unique()) < 2:
         print("ADVERTENCIA: Datos insuficientes para Gráfica 1. Usando fallback.")
         fig1, ax1 = plt.subplots(figsize=(10, 8))
         ax1.text(0.5, 0.5, "Datos Insuficientes para Gráfica 1", ha='center', va='center', fontsize=16, color='red')
@@ -181,17 +180,16 @@ def run_malware_analysis():
     X_clas_filt['min_flowpktl'] = np.log1p(X_clas_filt['min_flowpktl'])
     X_clas_filt['flow_fin'] = np.log1p(X_clas_filt['flow_fin'])
     
-    # TRANSFORMACIÓN
+    # TRANSFORMACIÓN SEGURA
     y_clas_encoded = le_clas.transform(df_filtered_svm[TARGET_COL_CLS])
     class_names_svm = le_clas.classes_
     
     
-    # Generación de Malla y Frontera
-    # Para evitar errores con muestras muy pequeñas, aseguramos que el rango de la malla sea válido
-    x_min = X_clas_filt.iloc[:, 0].min() if not X_clas_filt.empty else 0
-    x_max = X_clas_filt.iloc[:, 0].max() if not X_clas_filt.empty else 1
-    y_min = X_clas_filt.iloc[:, 1].min() if not X_clas_filt.empty else 0
-    y_max = X_clas_filt.iloc[:, 1].max() if not X_clas_filt.empty else 1
+    # Generación de Malla y Frontera 
+    x_min = X_clas_filt.iloc[:, 0].min()
+    x_max = X_clas_filt.iloc[:, 0].max()
+    y_min = X_clas_filt.iloc[:, 1].min()
+    y_max = X_clas_filt.iloc[:, 1].max()
     
     x_min, x_max = x_min - 0.1, x_max + 0.1
     y_min, y_max = y_min - 0.1, y_max + 0.1
@@ -206,11 +204,8 @@ def run_malware_analysis():
     fig1, ax1 = plt.subplots(figsize=(10, 8)) 
     ax1.contourf(xx, yy, Z, alpha=0.5, cmap='coolwarm') 
     
-    # 3. GRAFICAR PUNTOS: Bucle CRÍTICO, itera solo sobre los índices presentes.
+    # GRAFICAR PUNTOS: Bucle CRÍTICO, itera solo sobre los índices presentes.
     for i in np.unique(y_clas_encoded):
-        # i es el índice codificado (0, 1, 2, ...) que existe en la muestra.
-        # class_names_svm[i] siempre será válido porque i proviene de y_clas_encoded
-        # y y_clas_encoded solo contiene valores de clases conocidas por el encoder.
         class_name = class_names_svm[i] 
         ax1.scatter(X_clas_filt.iloc[y_clas_encoded == i, 0], X_clas_filt.iloc[y_clas_encoded == i, 1],
                     edgecolors='k', s=60, label=f'Clase: {class_name}', alpha=0.8)
