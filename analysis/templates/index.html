@@ -52,7 +52,7 @@
                 </p>
             </div>
 
-            <div class="bg-white p-6 rounded-xl shadow-lg border-t-4 border-teal-500">
+            <div class="bg-white p-6 rounded-xl shadow-lg border-t-4 border-teal-500" id="regression-surface-container">
                 <h2 class="2xl font-bold text-gray-800 mb-4" id="graph-title">3. Gráfica de Superficie de Predicción (Random Forest Regressor)</h2>
                 <div class="chart-container-square">
                     <canvas id="regressionSurfaceChart"></canvas> </div>
@@ -129,13 +129,20 @@
 
 
                 // 4. Renderizar la Gráfica 2 (Superficie de Regresión - Chart.js)
-                // Usar un bloque try-catch para atrapar el error de JavaScript 78/10 aquí
+                // *** BLOQUE TRY-CATCH PARA AISLAR EL ERROR 78/10 ***
                 try {
                     renderRegressionSurfaceChart(data.regressionData);
                 } catch(e) {
-                    console.error("Error al renderizar Gráfica de Superficie (Posiblemente error 78/10 en indexación):", e);
-                    // Opcional: mostrar un mensaje de error en el contenedor
-                    document.getElementById('regressionSurfaceChart').parentElement.innerHTML = '<p class="text-red-500 text-center">Error al renderizar la Gráfica de Superficie. Ver consola.</p>';
+                    console.error("Error al renderizar Gráfica de Superficie (Posible error 78/10):", e);
+                    // Deshabilita la gráfica en el HTML y muestra un mensaje de error
+                    const container = document.getElementById('regression-surface-container');
+                    container.innerHTML = `
+                        <h2 class="2xl font-bold text-gray-800 mb-4">3. Gráfica de Superficie de Predicción</h2>
+                        <div class="text-red-600 text-center py-8 border border-red-300 rounded-lg bg-red-50">
+                            Error de renderizado (JavaScript). Posible conflicto de longitud (78/10).
+                            <br>El resto del Dashboard es correcto.
+                        </div>
+                    `;
                 }
 
 
@@ -163,11 +170,11 @@
             
             // --- VERIFICACIÓN CRÍTICA DE SEGURIDAD ---
             if (!regressionData || !regressionData.x_line || !regressionData.x_data || !regressionData.y_data || !regressionData.y_data_class) {
-                console.warn("Faltan datos de regresión. No se puede renderizar la superficie.");
+                // Si la data está vacía, lanzamos un error para que lo capture el try-catch superior
                 throw new Error("Datos de regresión incompletos.");
             }
             
-            // La longitud que esperamos es 10 para los puntos reales (lo que solucionamos en Python)
+            // La longitud que esperamos es 10 para los puntos reales
             const realDataLength = regressionData.x_data.length;
 
             // 1. Datos para la Superficie (Mapa de Color) - Longitud 2500
