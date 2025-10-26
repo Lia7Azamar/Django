@@ -23,13 +23,16 @@ CSV_FILENAME = 'TotalFeatures-ISCXFlowMeter.csv'
 
 # MUESTRAS SIMPLIFICADAS: 
 N_ROWS_FOR_F1 = 20000 # Reducido para evitar problemas de memoria/timeout
-N_ROWS_FOR_PLOTS = 10 
+N_ROWS_FOR_PLOTS = 10 # Fijo en 10 para la visualización (Gráfica 1 y Tabla)
 
 ARTEFACTS = {
-    'f1': 'model_f1.joblib', 'reg': 'model_reg.joblib', 
-    'clas': 'model_svm.joblib', 'le': 'le_clas.joblib',
+    'f1': 'model_f1.joblib', 
+    'clas': 'model_svm.joblib', 
+    'le': 'le_clas.joblib',
     'scaler': 'scaler_f1.joblib' 
 }
+# Eliminamos 'reg' ya que no lo usaremos.
+
 RESOURCES_DIR = os.path.join(settings.BASE_DIR, 'hf_cache')
 os.makedirs(RESOURCES_DIR, exist_ok=True)
 
@@ -65,9 +68,9 @@ def load_global_resources():
     try:
         print("Iniciando descarga y carga optimizada de ARTEFACTOS...")
         
-        # Solo necesitamos los modelos f1, clas, le y scaler para este script simplificado
-        for key in ['f1', 'clas', 'le', 'scaler']:
-            path = download_hf_file(ARTEFACTS[key])
+        # Solo necesitamos los modelos f1, clas, le y scaler
+        for key, filename in ARTEFACTS.items():
+            path = download_hf_file(filename)
             GLOBAL_RESOURCES[key] = joblib.load(path)
             print(f"✅ Cargado {key}")
 
@@ -149,23 +152,50 @@ def run_malware_analysis():
 
     # =========================================================================
     # PARTE B: GRÁFICA 1 - Clasificación SVM (Muestra de 10 filas)
+    # SOLUCIÓN CRÍTICA: MANEJO DE ÍNDICES OUT OF RANGE
     # =========================================================================
-    top_3_classes = class_counts.index[:3].tolist()
-    df_filtered_svm = df_sample_10[df_sample_10[TARGET_COL_CLS].isin(top_3_classes)].copy()
+    
+    # 1. Obtenemos las clases que el modelo SVM/LabelEncoder conoce
+    known_classes = le_clas.classes_.tolist()
+    
+    # Filtramos la muestra de 10 filas para solo incluir clases conocidas por el encoder
+    df_filtered_svm = df_sample_10[df_sample_10[TARGET_COL_CLS].isin(known_classes)].copy()
+    
+    # Si la muestra es muy pequeña, regresamos una gráfica de fallback.
+    if df_filtered_svm.empty or len(df_filtered_svm) < 2:
+        print("ADVERTENCIA: Datos insuficientes para Gráfica 1. Usando fallback.")
+        fig1, ax1 = plt.subplots(figsize=(10, 8))
+        ax1.text(0.5, 0.5, "Datos Insuficientes para Gráfica 1", ha='center', va='center', fontsize=16, color='red')
+        grafica1_b64 = generar_grafica_base64(fig1)
+        
+        return {
+            'accuracy': f1_rounded, 
+            'dataframe': df_sample_10.to_dict('records'),
+            'grafica1_b64': grafica1_b64, 
+            'grafica3_b64': "", 
+            'regressionData': {}
+        }
+        
     X_clas_filt = df_filtered_svm[['min_flowpktl', 'flow_fin']].copy()
     
     X_clas_filt['min_flowpktl'] = np.log1p(X_clas_filt['min_flowpktl'])
     X_clas_filt['flow_fin'] = np.log1p(X_clas_filt['flow_fin'])
     
-    try:
-        y_clas_encoded = le_clas.transform(df_filtered_svm[TARGET_COL_CLS])
-        class_names_svm = le_clas.classes_
-    except ValueError:
-        class_names_svm = ['A', 'B', 'C']
-        y_clas_encoded = [0] * len(X_clas_filt)
+    # TRANSFORMACIÓN
+    y_clas_encoded = le_clas.transform(df_filtered_svm[TARGET_COL_CLS])
+    class_names_svm = le_clas.classes_
     
-    x_min, x_max = X_clas_filt.iloc[:, 0].min() - 0.1, X_clas_filt.iloc[:, 0].max() + 0.1
-    y_min, y_max = X_clas_filt.iloc[:, 1].min() - 0.1, X_clas_filt.iloc[:, 1].max() + 0.1
+    
+    # Generación de Malla y Frontera
+    # Para evitar errores con muestras muy pequeñas, aseguramos que el rango de la malla sea válido
+    x_min = X_clas_filt.iloc[:, 0].min() if not X_clas_filt.empty else 0
+    x_max = X_clas_filt.iloc[:, 0].max() if not X_clas_filt.empty else 1
+    y_min = X_clas_filt.iloc[:, 1].min() if not X_clas_filt.empty else 0
+    y_max = X_clas_filt.iloc[:, 1].max() if not X_clas_filt.empty else 1
+    
+    x_min, x_max = x_min - 0.1, x_max + 0.1
+    y_min, y_max = y_min - 0.1, y_max + 0.1
+    
     xx, yy = np.meshgrid(np.linspace(x_min, x_max, 200), np.linspace(y_min, y_max, 200))
     feature_names = X_clas_filt.columns
     grid_data_svc = pd.DataFrame(np.c_[xx.ravel(), yy.ravel()], columns=feature_names) 
@@ -175,9 +205,16 @@ def run_malware_analysis():
 
     fig1, ax1 = plt.subplots(figsize=(10, 8)) 
     ax1.contourf(xx, yy, Z, alpha=0.5, cmap='coolwarm') 
-    for i in range(len(class_names_svm)):
+    
+    # 3. GRAFICAR PUNTOS: Bucle CRÍTICO, itera solo sobre los índices presentes.
+    for i in np.unique(y_clas_encoded):
+        # i es el índice codificado (0, 1, 2, ...) que existe en la muestra.
+        # class_names_svm[i] siempre será válido porque i proviene de y_clas_encoded
+        # y y_clas_encoded solo contiene valores de clases conocidas por el encoder.
+        class_name = class_names_svm[i] 
         ax1.scatter(X_clas_filt.iloc[y_clas_encoded == i, 0], X_clas_filt.iloc[y_clas_encoded == i, 1],
-                    edgecolors='k', s=60, label=f'Clase: {class_names_svm[i]}', alpha=0.8)
+                    edgecolors='k', s=60, label=f'Clase: {class_name}', alpha=0.8)
+    
     ax1.set_title('Gráfica 1: Separabilidad de Datos con SVM (Log Transformación)', fontsize=14)
     ax1.set_xlabel('Característica: log(1 + min_flowpktl)', fontsize=12) 
     ax1.set_ylabel('Característica: log(1 + flow_fin)', fontsize=12)
@@ -187,18 +224,17 @@ def run_malware_analysis():
 
     # =========================================================================
     # PARTES C & D: REGRESIÓN - ELIMINADAS.
-    # Se regresan valores vacíos para que el frontend no falle.
     # =========================================================================
-    grafica3_b64 = "" # Vacío
-    regression_data_surface = {} # Vacío
+    grafica3_b64 = "" 
+    regression_data_surface = {} 
 
-    # 3. Preparación de Salida Final (Tabla de 10 filas)
+    # 4. Preparación de Salida Final (Tabla de 10 filas)
     df_sample_head = df_sample_10.to_dict('records') 
 
     return {
         'accuracy': f1_rounded, 
         'dataframe': df_sample_head,
         'grafica1_b64': grafica1_b64, 
-        'grafica3_b64': grafica3_b64, # Vacío
-        'regressionData': regression_data_surface # Vacío
+        'grafica3_b64': grafica3_b64, 
+        'regressionData': regression_data_surface 
     }
