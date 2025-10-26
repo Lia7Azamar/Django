@@ -224,6 +224,9 @@ def run_malware_analysis():
     # Esto soluciona el desajuste de longitud con la muestra de cabecera (df_safe.head(10)).
     X_test_reg = X_test_reg.head(10)
     y_test_reg_transf = y_test_reg_transf.head(10)
+    # ✅ ADICIÓN: También limitar X_reg_top y y_reg_transformed a 10 para mantener coherencia
+    X_reg_top = X_reg_top.head(10)
+    y_reg_transformed = y_reg_transformed.head(10)
     # --------------------------------------------------------
 
     # Generar cuadrícula y predecir
