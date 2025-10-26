@@ -1,13 +1,15 @@
 import json
 import os
+import time # 👈 Importamos la librería time
 from django.conf import settings
 
 # --- CONFIGURACIÓN DE ARCHIVOS ---
-# El archivo JSON debe estar en la misma carpeta o accesible a través de la ruta.
-# Se usa la ruta BASE de Django para mayor robustez.
 JSON_FILE_NAME = 'static_results.json'
 
-# Inicializamos el diccionario de datos cargados
+# --- CONFIGURACIÓN DEL RETRASO ---
+# Ajusta este valor (en segundos) para simular el tiempo de cálculo.
+SIMULATION_DELAY_SECONDS = 5 
+
 STATIC_RESULTS = None
 RESOURCES_LOADED = False
 
@@ -18,15 +20,15 @@ def load_global_resources():
     global STATIC_RESULTS, RESOURCES_LOADED
     
     if RESOURCES_LOADED:
-        print("Recursos estáticos ya cargados. Omitiendo la carga.")
+        # print("Recursos estáticos ya cargados. Omitiendo la carga.")
         return
 
     try:
         # Intentamos obtener la ruta base del proyecto Django
+        # Asume que el archivo static_results.json está en el directorio 'analysis' o en la raíz.
         base_dir = settings.BASE_DIR
         file_path = os.path.join(base_dir, 'analysis', JSON_FILE_NAME)
         
-        # Si la ruta no funciona, intentamos la ruta directa (por si el script está en la raíz)
         if not os.path.exists(file_path):
              file_path = os.path.join(base_dir, JSON_FILE_NAME)
              if not os.path.exists(file_path):
@@ -43,13 +45,17 @@ def load_global_resources():
     except Exception as e:
         print(f"❌ ERROR FATAL AL CARGAR EL JSON ESTATICO: {e}") 
         RESOURCES_LOADED = False
-        STATIC_RESULTS = None # Aseguramos que sea None si hay fallo
+        STATIC_RESULTS = None 
 
 # -------------------------------------------------------------------------
-# FUNCIÓN DE EJECUCIÓN PRINCIPAL
+# FUNCIÓN DE EJECUCIÓN PRINCIPAL (CON DELAY)
 # -------------------------------------------------------------------------
 
 def run_malware_analysis():
+    
+    # ⏱️ SIMULACIÓN DE CÁLCULO
+    print(f"STATUS: Simulando tiempo de cálculo ({SIMULATION_DELAY_SECONDS} segundos)...")
+    time.sleep(SIMULATION_DELAY_SECONDS) 
     
     if not RESOURCES_LOADED or STATIC_RESULTS is None:
         return {
@@ -62,8 +68,11 @@ def run_malware_analysis():
             'status_message': '❌ Fallo en la carga de datos estáticos.'
         }
 
-    # El script simplemente devuelve el diccionario completo cargado del archivo.
-    print("STATUS: ✅ Todos los datos estáticos de análisis han sido procesados y retornados.")
+    # 🟢 MENSAJE DE CONFIRMACIÓN (para el log del servidor)
+    print("STATUS: ✅ Datos de análisis cargados completamente.")
 
-    # Devolvemos el diccionario completo.
+    # Devolvemos el diccionario completo, añadiendo un mensaje de estado para el frontend
+    if 'status_message' not in STATIC_RESULTS:
+         STATIC_RESULTS['status_message'] = '✅ Datos de análisis cargados completamente.'
+         
     return STATIC_RESULTS
