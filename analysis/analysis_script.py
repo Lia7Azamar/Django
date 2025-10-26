@@ -2,302 +2,272 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import f1_score
 from sklearn.preprocessing import StandardScaler, LabelEncoder
-import numpy as np
+import joblib 
+from huggingface_hub import hf_hub_download 
 import os
+import numpy as np
 import matplotlib.pyplot as plt
 import io
 import base64
 import matplotlib
-import joblib 
-from huggingface_hub import hf_hub_download 
-from django.conf import settings 
+
+# Necesario para el contexto de Django
+try:
+    from django.conf import settings
+except ImportError:
+    # Usar un path base si Django no está configurado (e.g., para pruebas locales)
+    class DummySettings:
+        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    settings = DummySettings()
+    print("ADVERTENCIA: Usando configuración de Django ficticia (settings.BASE_DIR).")
+
 
 # Usar backend no interactivo para servidores
 matplotlib.use('Agg')
 plt.style.use('default') 
 
-# --- CONFIGURACIÓN DE HUGGING FACE ---
+# --- CONFIGURACIÓN DE HUGGING FACE Y ARTEFACTOS ---
 HF_REPO_ID = "Lia896gh/csv" 
 HF_REPO_TYPE = "dataset" 
-HF_SUBFOLDER = "" 
-
-# --- NOMBRES DE ARCHIVOS EN EL REPOSITORIO DE HF ---
-MODEL_F1_FILENAME = 'model_f1.joblib'
-MODEL_REG_FILENAME = 'model_reg.joblib'
-MODEL_SVM_FILENAME = 'model_svm.joblib'
-LE_CLAS_FILENAME = 'le_clas.joblib'
 CSV_FILENAME = 'TotalFeatures-ISCXFlowMeter.csv'
+N_SAMPLE_FRAC = 0.1 # Fracción de la muestra a cargar
+N_ROWS_FOR_F1 = 500000 # Máx. filas a cargar del CSV para F1-Score
 
-# Columnas mínimas necesarias
-# 🚨 VOLVEMOS A 'calss' para que Pandas pueda leer el CSV original
-COLUMNS_NEEDED_FOR_ML = [
-    'calss', 
-    'duration', 'total_fpackets', 'total_bpktl', 
-    'min_fpktl', 'mean_fiat', 'flowPktsPerSecond', 'min_active', 
-    'mean_active', 'Init_Win_bytes_forward', 'min_flowpktl', 'flow_fin'
-]
-
-# Directorio de caché temporal
+ARTEFACTS = {
+    'f1': 'model_f1.joblib', 
+    'reg': 'model_reg.joblib', 
+    'clas': 'model_svm.joblib', 
+    'le': 'le_clas.joblib',
+    'scaler': 'scaler_f1.joblib' 
+}
 RESOURCES_DIR = os.path.join(settings.BASE_DIR, 'hf_cache')
 os.makedirs(RESOURCES_DIR, exist_ok=True)
 
-
-# --------------------------------------------------------------------
-# *** FUNCIÓN DE OPTIMIZACIÓN DE MEMORIA DEL DATAFRAME ***
-# --------------------------------------------------------------------
-
-def optimize_dataframe_memory(df):
-    """Reduce el uso de memoria de un DataFrame ajustando los tipos de datos."""
-    for col in df.columns:
-        if df[col].dtype != object:
-            c_min = df[col].min()
-            c_max = df[col].max()
-            
-            if str(df[col].dtype)[:3] == 'int':
-                if c_min > np.iinfo(np.int8).min and c_max < np.iinfo(np.int8).max:
-                    df[col] = df[col].astype(np.int8)
-                elif c_min > np.iinfo(np.int16).min and c_max < np.iinfo(np.int16).max:
-                    df[col] = df[col].astype(np.int16)
-                elif c_min > np.iinfo(np.int32).min and c_max < np.iinfo(np.int32).max:
-                    df[col] = df[col].astype(np.int32)    
-            
-            elif str(df[col].dtype)[:5] == 'float':
-                if c_min > np.finfo(np.float32).min and c_max < np.finfo(np.float32).max:
-                    df[col] = df[col].astype(np.float32)
-    
-    return df
-
-# --------------------------------------------------------------------
-# *** CARGA GLOBAL DE DATOS Y MODELOS DESDE HUGGING FACE ***
-# --------------------------------------------------------------------
-
-# Inicializar variables globales
-GLOBAL_DF = None
-GLOBAL_MODEL_F1 = None
-GLOBAL_MODEL_REG = None
-GLOBAL_MODEL_CLAS = None
-GLOBAL_LE_CLAS = None
+# --- VARIABLES GLOBALES DE RECURSOS ---
+GLOBAL_RESOURCES = {}
+CSV_FILE_PATH = None
 RESOURCES_LOADED = False
 
-# Función auxiliar para descargar un archivo de Hugging Face
+COLUMNS_NEEDED_FOR_ML = [
+    'calss', 'duration', 'total_fpackets', 'total_bpktl', 
+    'min_fpktl', 'mean_fiat', 'flowPktsPerSecond', 'min_active', 
+    'mean_active', 'Init_Win_bytes_forward', 'min_flowpktl', 'flow_fin'
+]
+FEATURES_CLS_ALL = ['duration', 'total_fpackets', 'total_bpktl', 'min_fpktl', 
+                    'mean_fiat', 'flowPktsPerSecond', 'min_active', 'mean_active', 
+                    'Init_Win_bytes_forward']
+TARGET_COL_CLS = 'Class'
+
+# --------------------------------------------------------------------
+# *** FUNCIÓN DE CARGA: Se llama SOLO una vez al inicio del servidor ***
+# --------------------------------------------------------------------
+
 def download_hf_file(filename):
-    file_path_in_repo = os.path.join(HF_SUBFOLDER, filename)
-    print(f"Descargando {file_path_in_repo} de Hugging Face (ID: {HF_REPO_ID}, Tipo: {HF_REPO_TYPE})...")
-    
+    """Descarga un archivo de Hugging Face a la caché local."""
     return hf_hub_download(
         repo_id=HF_REPO_ID, 
-        filename=file_path_in_repo,
+        filename=filename,
         local_dir=RESOURCES_DIR,
         repo_type=HF_REPO_TYPE
     )
 
-try:
-    # 1. DESCARGA A CACHÉ
-    print(f"Iniciando descarga y lectura optimizada desde Hugging Face: {HF_REPO_ID}")
+def load_global_resources():
+    """Descarga modelos y CSV, y carga solo los modelos en memoria."""
+    global CSV_FILE_PATH, RESOURCES_LOADED, GLOBAL_RESOURCES
     
-    # Descargar todos los archivos
-    CSV_FILE_PATH = download_hf_file(CSV_FILENAME)
-    MODEL_F1_PATH = download_hf_file(MODEL_F1_FILENAME)
-    MODEL_REG_PATH = download_hf_file(MODEL_REG_FILENAME)
-    MODEL_SVM_PATH = download_hf_file(MODEL_SVM_FILENAME)
-    LE_CLAS_PATH = download_hf_file(LE_CLAS_FILENAME)
+    try:
+        print("Iniciando descarga y carga optimizada de ARTEFACTOS...")
+        
+        # 1. Descargar y Cargar los 5 Modelos/Objetos (Artefactos)
+        for key, filename in ARTEFACTS.items():
+            path = download_hf_file(filename)
+            GLOBAL_RESOURCES[key] = joblib.load(path)
+            print(f"✅ Cargado {key} de {filename}")
 
-    # 1b. Cargar CSV con optimización (50,000 filas)
-    N_ROWS_TO_LOAD = 50000 
-    
-    df_temp = pd.read_csv(
-        CSV_FILE_PATH,
-        nrows=N_ROWS_TO_LOAD,
-        usecols=COLUMNS_NEEDED_FOR_ML 
-    ) 
-    
-    # Preprocesamiento inicial
-    df_temp.columns = df_temp.columns.str.strip()
-    
-    # 🚨 CORRECCIÓN CRÍTICA: Renombramos 'calss' a 'Class' inmediatamente después de la carga
-    df_temp.rename(columns={'calss': 'Class'}, inplace=True)
-    
-    target_col_name = 'Class' 
+        # 2. Descargar el CSV SOLO para obtener su RUTA
+        CSV_FILE_PATH = download_hf_file(CSV_FILENAME)
+        
+        RESOURCES_LOADED = True
+        print("Recursos de ML listos para el despliegue.")
 
-    # Conversión y manejo de NaNs/Infinitos
-    for col in df_temp.columns:
-        if col != target_col_name:
-            df_temp[col] = pd.to_numeric(df_temp[col], errors='coerce') 
-    df_temp.replace([np.inf, -np.inf, np.nan], 0, inplace=True)
-    
-    df_temp = optimize_dataframe_memory(df_temp)
-    GLOBAL_DF = df_temp
-    
-    # 1c. Cargar Modelos (Comprimidos)
-    GLOBAL_MODEL_F1 = joblib.load(MODEL_F1_PATH)
-    GLOBAL_MODEL_REG = joblib.load(MODEL_REG_PATH)
-    GLOBAL_MODEL_CLAS = joblib.load(MODEL_SVM_PATH)
-    GLOBAL_LE_CLAS = joblib.load(LE_CLAS_PATH)
-    
-    RESOURCES_LOADED = True
-    print("Recursos de ML cargados exitosamente desde Hugging Face y optimizados.")
+    except Exception as e:
+        print(f"ERROR FATAL AL CARGAR RECURSOS: {e}")
+        RESOURCES_LOADED = False
 
-except Exception as e:
-    print(f"ERROR FATAL: Fallo al cargar recursos (Timeout/Memoria/Ruta de Archivo) debido a: {e}")
-    
+# --------------------------------------------------------------------
+# *** FUNCIONES AUXILIARES ***
+# --------------------------------------------------------------------
 
-# Función auxiliar para convertir gráficas a base64
 def generar_grafica_base64(fig):
-    """Convierte un objeto Matplotlib figure a una cadena base64."""
+    """Guarda una figura de Matplotlib en un buffer y la codifica a Base64."""
     buf = io.BytesIO()
-    fig.savefig(buf, format='png')
-    buf.seek(0)
-    img_b64 = base64.b64encode(buf.read()).decode('utf-8')
+    fig.savefig(buf, format='png', bbox_inches='tight', facecolor='white') 
     plt.close(fig)
-    return img_b64
+    return base64.b64encode(buf.getvalue()).decode('utf-8')
+
 
 # -------------------------------------------------------------------------
-# FUNCIÓN DE EJECUCIÓN (USADA POR DJANGO EN RENDER)
+# FUNCIÓN DE EJECUCIÓN PRINCIPAL (LLAMADA POR DJANGO VIEW)
 # -------------------------------------------------------------------------
 
 def run_malware_analysis():
-    """Usa los modelos y datos cargados globalmente y genera resultados."""
+    """Usa los modelos cargados y datos bajo demanda para generar resultados."""
     
     # 1. Comprobación de recursos globales
-    if GLOBAL_DF is None or GLOBAL_MODEL_F1 is None or not RESOURCES_LOADED:
+    if not RESOURCES_LOADED:
         return { 
-            'error': "ERROR: Recursos de ML no cargados. El servidor falló en la inicialización o Hugging Face no fue accesible. Verifique los logs.", 
-            'accuracy': 0.0, 
-            'dataframe': [] 
+            'error': "ERROR: Recursos de ML no cargados. Verifique los logs de Railway.", 
+            'accuracy': 0.0, 'dataframe': [] 
         }
 
-    # Usar los recursos globales
-    df_safe = GLOBAL_DF.copy() 
-    model_f1 = GLOBAL_MODEL_F1
+    # 2. Cargar y preprocesar la muestra de datos
+    df_full = None
+    try:
+        print(f"Cargando {N_ROWS_FOR_F1} filas del CSV...")
+        df_full = pd.read_csv(
+            CSV_FILE_PATH,
+            nrows=N_ROWS_FOR_F1,
+            usecols=COLUMNS_NEEDED_FOR_ML
+        )
+        
+        # Preprocesamiento inicial
+        df_full.columns = df_full.columns.str.strip()
+        df_full.columns = [col.replace("calss", "Class") for col in df_full.columns] 
+        for col in df_full.columns:
+            if col != TARGET_COL_CLS:
+                df_full[col] = pd.to_numeric(df_full[col], errors='coerce') 
+        df_full.replace([np.inf, -np.inf, np.nan], 0, inplace=True)
 
-    # 2. Preprocesamiento de datos 
-    target_col_cls = 'Class' 
-    features_cls_all = ['duration', 'total_fpackets', 'total_bpktl', 'min_fpktl', 'mean_fiat', 'flowPktsPerSecond', 'min_active', 'mean_active', 'Init_Win_bytes_forward']
+    except Exception as e:
+        return {'error': f"Fallo al cargar la muestra del CSV en Railway: {e}", 'accuracy': 0.0, 'dataframe': []}
     
-    class_counts = df_safe[target_col_cls].value_counts()
-    f1_rounded = 0.0 
+    # Usar el 10% del dataframe cargado para las gráficas 2D y Regresión
+    df_safe = df_full.copy()
+    df_sample = df_safe.sample(frac=N_SAMPLE_FRAC, random_state=42)
     
-    # Inicializar variables de salida
-    grafica1_b64 = None 
-    grafica3_b64 = None
-    regression_data_surface = {}
-    
+    # Asignar recursos globales cargados
+    model_f1 = GLOBAL_RESOURCES['f1']
+    model_reg = GLOBAL_RESOURCES['reg']
+    model_clas = GLOBAL_RESOURCES['clas']
+    le_clas = GLOBAL_RESOURCES['le']
+    scaler_f1 = GLOBAL_RESOURCES['scaler']
+
     # =========================================================================
     # PARTE A: CLASIFICACIÓN BINARIA (Calculo F1-Score)
     # =========================================================================
-    
-    if len(class_counts) < 2:
-        return { 
-            'error': f"Error ML: La muestra cargada ({len(df_safe)} filas) solo tiene {len(class_counts)} clases únicas. Se requieren al menos 2 para F1.", 
-            'accuracy': 0.0, 
-            'dataframe': df_safe.head(10).to_dict('records') 
-        }
-        
+    class_counts = df_safe[TARGET_COL_CLS].value_counts()
     top_2_classes = class_counts.index[:2].tolist()
-    df_filtered_cls_f1 = df_safe[df_safe[target_col_cls].isin(top_2_classes)].copy()
+    df_filtered_cls_f1 = df_safe[df_safe[TARGET_COL_CLS].isin(top_2_classes)].copy()
     class_map = {top_2_classes[0]: 0, top_2_classes[1]: 1} 
-    df_filtered_cls_f1['target_binary'] = df_filtered_cls_f1[target_col_cls].map(class_map)
+    df_filtered_cls_f1['target_binary'] = df_filtered_cls_f1[TARGET_COL_CLS].map(class_map)
     y_cls_f1 = df_filtered_cls_f1['target_binary']
-    X_cls_f1 = df_filtered_cls_f1[features_cls_all].copy()
-    X_cls_f1.replace([np.inf, -np.inf], 0, inplace=True)
+    X_cls_f1 = df_filtered_cls_f1[FEATURES_CLS_ALL].copy()
+    X_cls_f1.replace([np.inf, -np.inf], 0, inplace=True) 
     
-    # Split
-    if len(X_cls_f1) < 2:
-        return {'error': "Error ML: Después de filtrar, no quedan suficientes muestras para el split de F1.", 'accuracy': 0.0, 'dataframe': [] }
-        
     X_train_f1, X_test_f1, y_train_f1, y_test_f1 = train_test_split(X_cls_f1, y_cls_f1, test_size=0.4, random_state=42)
     
-    # Escalar y Predecir
-    scaler_f1 = StandardScaler()
-    if X_train_f1.empty:
-         print("ADVERTENCIA: X_train_f1 está vacío, saltando cálculo de F1.")
-    else:
-        scaler_f1.fit(X_train_f1) 
-        X_test_scaled_f1 = scaler_f1.transform(X_test_f1)
-        
-        y_pred_f1 = model_f1.predict(X_test_scaled_f1) 
-        f1 = f1_score(y_test_f1, y_pred_f1, average='binary') 
-        f1_rounded = round(f1, 4)
+    # USAR SCALER Y MODELO PRE-ENTRENADO
+    X_test_scaled_f1 = scaler_f1.transform(X_test_f1)
+    y_pred_f1 = model_f1.predict(X_test_scaled_f1)
+    f1 = f1_score(y_test_f1, y_pred_f1, average='binary') 
+    f1_rounded = round(f1, 4)
 
     # =========================================================================
-    # PARTE B: GRÁFICA 1 - Clasificación SVM (DESACTIVADA POR ESTABILIDAD)
+    # PARTE B: GRÁFICA 1 - Clasificación SVM (Base64)
     # =========================================================================
+    top_3_classes = class_counts.index[:3].tolist()
+    df_filtered_svm = df_sample[df_sample[TARGET_COL_CLS].isin(top_3_classes)].copy()
+    X_clas_filt = df_filtered_svm[['min_flowpktl', 'flow_fin']].copy()
     
-    print("ADVERTENCIA: Gráfica SVM (1) DESACTIVADA para evitar fallos de dimensión/RAM en Railway.")
-    grafica1_b64 = None
+    X_clas_filt['min_flowpktl'] = np.log1p(X_clas_filt['min_flowpktl'])
+    X_clas_filt['flow_fin'] = np.log1p(X_clas_filt['flow_fin'])
+    
+    # USAR LABEL ENCODER PRE-ENTRENADO
+    try:
+        y_clas_encoded = le_clas.transform(df_filtered_svm[TARGET_COL_CLS])
+        class_names_svm = le_clas.classes_
+    except ValueError:
+        return {'error': "Error de LabelEncoder: Muestra con clases desconocidas.", 'accuracy': f1_rounded, 'dataframe': [] }
+    
+    # Generar la cuadrícula
+    x_min, x_max = X_clas_filt.iloc[:, 0].min() - 0.1, X_clas_filt.iloc[:, 0].max() + 0.1
+    y_min, y_max = X_clas_filt.iloc[:, 1].min() - 0.1, X_clas_filt.iloc[:, 1].max() + 0.1
+    xx, yy = np.meshgrid(np.linspace(x_min, x_max, 200), np.linspace(y_min, y_max, 200))
+    feature_names = X_clas_filt.columns
+    grid_data_svc = pd.DataFrame(np.c_[xx.ravel(), yy.ravel()], columns=feature_names) 
+
+    # USAR MODELO SVM PRE-ENTRENADO
+    Z = model_clas.predict(grid_data_svc) 
+    Z = Z.reshape(xx.shape)
+
+    # Plot
+    fig1, ax1 = plt.subplots(figsize=(10, 8))
+    ax1.contourf(xx, yy, Z, alpha=0.5, cmap='coolwarm') 
+    for i, class_name in enumerate(class_names_svm):
+        ax1.scatter(X_clas_filt.iloc[y_clas_encoded == i, 0], X_clas_filt.iloc[y_clas_encoded == i, 1],
+                    edgecolors='k', s=60, label=f'Clase: {class_name}', alpha=0.8)
+    ax1.set_title('Gráfica 1: Separabilidad de Datos con SVM (Log Transformación)', fontsize=14)
+    ax1.set_xlabel('Característica: log(1 + min_flowpktl)', fontsize=12) 
+    ax1.set_ylabel('Característica: log(1 + flow_fin)', fontsize=12)
+    ax1.legend(loc='upper right', fontsize=10)
+    ax1.grid(True, linestyle='--', alpha=0.6)
+    grafica1_b64 = generar_grafica_base64(fig1)
 
     # =========================================================================
-    # PARTES C & D: REGRESIÓN (Gráficas 2 y 3)
+    # PARTES C & D: REGRESIÓN
     # =========================================================================
-    
-    y_reg_original = df_safe['Init_Win_bytes_forward'].copy()
+    y_reg_original = df_sample['Init_Win_bytes_forward'].copy()
     y_reg_original[y_reg_original < 0] = 0
     y_reg_original.replace([np.inf, -np.inf, np.nan], 0, inplace=True) 
     y_reg_transformed = np.log1p(y_reg_original)
-    
-    X_reg = df_safe.drop(['Init_Win_bytes_forward', target_col_cls], axis=1, errors='ignore')
+
+    X_reg = df_sample.drop(['Init_Win_bytes_forward', TARGET_COL_CLS], axis=1, errors='ignore')
     X_reg.replace([np.inf, -np.inf], 0, inplace=True) 
-    
-    if len(X_reg.columns) < 2:
-        print("ADVERTENCIA: Saltando Gráfica 2 y 3, no hay suficientes columnas para X_reg.")
+
+    # Usar las features importances del MODELO REGRESOR PRE-ENTRENADO
+    if hasattr(model_reg, 'feature_importances_'):
+        feature_importances = pd.Series(model_reg.feature_importances_, index=X_reg.columns)
+        top_2_features = feature_importances.nlargest(2).index.tolist()
     else:
-        # Usar feature importances o las primeras 2
-        model_reg = GLOBAL_MODEL_REG
-        if hasattr(model_reg, 'feature_importances_'):
-            feature_importances = pd.Series(model_reg.feature_importances_, index=X_reg.columns)
-            top_2_features = feature_importances.nlargest(2).index.tolist()
-        else:
-            top_2_features = X_reg.columns[:2].tolist()
-        
-        if len(top_2_features) < 2:
-            top_2_features = X_reg.columns[:2].tolist()
+        top_2_features = X_reg.columns[:2].tolist()
+    
+    X_reg_top = X_reg[top_2_features]
+    X_reg_top.replace([np.inf, -np.inf], 0, inplace=True)
+    
+    X_train_reg, X_test_reg, y_train_reg_transf, y_test_reg_transf = train_test_split(
+        X_reg_top, y_reg_transformed, test_size=0.3, random_state=42
+    )
 
-        X_reg_top = X_reg[top_2_features]
-        X_reg_top.replace([np.inf, -np.inf], 0, inplace=True)
-        
-        X_train_reg, X_test_reg, y_train_reg_transf, y_test_reg_transf = train_test_split(
-            X_reg_top, y_reg_transformed, test_size=0.3, random_state=42
-        )
-        
-        x_min_r, x_max_r = X_reg_top.iloc[:, 0].min() - 0.5, X_reg_top.iloc[:, 0].max() + 0.5
-        y_min_r, y_max_r = X_reg_top.iloc[:, 1].min() - 0.5, X_reg_top.iloc[:, 1].max() + 0.5
-        
-        # Malla de 3x3 (la más pequeña posible)
-        xx_r, yy_r = np.meshgrid(np.linspace(x_min_r, x_max_r, 3), np.linspace(y_min_r, y_max_r, 3))
-        
-        feature_names = X_reg_top.columns
-        grid_data = pd.DataFrame(np.c_[xx_r.ravel(), yy_r.ravel()], columns=feature_names)
-        grid_data.replace([np.inf, -np.inf], 0, inplace=True) 
+    # Generar cuadrícula y predecir
+    x_min_r, x_max_r = X_reg_top.iloc[:, 0].min() - 0.5, X_reg_top.iloc[:, 0].max() + 0.5
+    y_min_r, y_max_r = X_reg_top.iloc[:, 1].min() - 0.5, X_reg_top.iloc[:, 1].max() + 0.5
+    xx_r, yy_r = np.meshgrid(np.linspace(x_min_r, x_max_r, 50), np.linspace(y_min_r, y_max_r, 50))
+    grid_data = pd.DataFrame(np.c_[xx_r.ravel(), yy_r.ravel()], columns=top_2_features)
+    grid_data.replace([np.inf, -np.inf], 0, inplace=True) 
 
-        Z_reg = model_reg.predict(grid_data) 
+    # USAR MODELO REG PRE-ENTRENADO
+    Z_reg = model_reg.predict(grid_data) 
 
-        # LIMITACIÓN DE DATOS SERIALIZADOS
-        LIMIT_DATA_POINTS = 1000
-        
-        regression_data_surface = {
-            'x_feature': top_2_features[0], 
-            'y_feature': top_2_features[1],
-            'x_line': xx_r.flatten().tolist(), 
-            'y_line': yy_r.flatten().tolist(),           
-            'z_line': Z_reg.flatten().tolist(), 
-            'x_data': X_reg_top.iloc[:LIMIT_DATA_POINTS, 0].tolist(), 
-            'y_data': X_reg_top.iloc[:LIMIT_DATA_POINTS, 1].tolist(), 
-            'y_data_class': y_reg_transformed.iloc[:LIMIT_DATA_POINTS].tolist()
-        }
-        
-        y_pred_reg_transf = model_reg.predict(X_test_reg)
-        
-        # Gráfica 3
-        fig3, ax3 = plt.subplots(figsize=(10, 8))
-        ax3.scatter(y_test_reg_transf.head(LIMIT_DATA_POINTS), y_pred_reg_transf[:LIMIT_DATA_POINTS], alpha=0.6, color='#5B21B6') 
-        min_val = min(y_test_reg_transf.min(), y_pred_reg_transf.min())
-        max_val = max(y_test_reg_transf.max(), y_pred_reg_transf.max())
-        ax3.plot([min_val, max_val], [min_val, max_val], 'r--', lw=2)
-        ax3.set_xlabel("Valores Reales (log transformados)", fontsize=12)
-        ax3.set_ylabel("Valores Predichos (log transformados)", fontsize=12)
-        ax3.set_title("Gráfica 3: Valores reales vs. Predicciones (Log Transformados)", fontsize=14)
-        ax3.grid(True, linestyle='--', alpha=0.6)
-        grafica3_b64 = generar_grafica_base64(fig3)
+    regression_data_surface = {
+        'x_feature': top_2_features[0], 'y_feature': top_2_features[1],
+        'x_line': xx_r.flatten().tolist(), 'y_line': yy_r.flatten().tolist(),           
+        'z_line': Z_reg.flatten().tolist(), 'x_data': X_reg_top.iloc[:, 0].tolist(), 
+        'y_data': X_reg_top.iloc[:, 1].tolist(), 'y_data_class': y_reg_transformed.tolist()
+    }
+    
+    y_pred_reg_transf = model_reg.predict(X_test_reg)
+    
+    # Plot Gráfica 3
+    fig3, ax3 = plt.subplots(figsize=(10, 8))
+    ax3.scatter(y_test_reg_transf, y_pred_reg_transf, alpha=0.6, color='#5B21B6') 
+    min_val = min(y_test_reg_transf.min(), y_pred_reg_transf.min())
+    max_val = max(y_test_reg_transf.max(), y_pred_reg_transf.max())
+    ax3.plot([min_val, max_val], [min_val, max_val], 'r--', lw=2)
+    ax3.set_xlabel("Valores Reales (log transformados)", fontsize=12)
+    ax3.set_ylabel("Valores Predichos (log transformados)", fontsize=12)
+    ax3.set_title("Gráfica 3: Valores reales vs. Predicciones (Log Transformados)", fontsize=14)
+    ax3.grid(True, linestyle='--', alpha=0.6)
+    grafica3_b64 = generar_grafica_base64(fig3)
 
     # 3. Preparación de Salida Final
     df_sample_head = df_safe.head(10).to_dict('records') 
@@ -309,7 +279,3 @@ def run_malware_analysis():
         'grafica3_b64': grafica3_b64, 
         'regressionData': regression_data_surface
     }
-
-
-if __name__ == '__main__':
-    pass
