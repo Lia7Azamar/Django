@@ -21,10 +21,10 @@ HF_REPO_ID = "Lia896gh/csv"
 HF_REPO_TYPE = "dataset" 
 CSV_FILENAME = 'TotalFeatures-ISCXFlowMeter.csv'
 
-# OPTIMIZACIÓN MEMORIA: Reducido a 100k filas para F1-Score
+# OPTIMIZACIÓN MEMORIA: Se mantiene la muestra reducida
 N_ROWS_FOR_F1 = 100000 
 
-# SOLUCIÓN ERROR 78/10: Muestra fija para las gráficas 2D
+# Muestra fija para las gráficas 2D
 N_ROWS_FOR_PLOTS = 500 
 
 ARTEFACTS = {
@@ -51,7 +51,7 @@ FEATURES_CLS_ALL = ['duration', 'total_fpackets', 'total_bpktl', 'min_fpktl',
 TARGET_COL_CLS = 'Class'
 
 # --------------------------------------------------------------------
-# *** FUNCIÓN DE CARGA GLOBAL (LLAMADA UNA VEZ EN APPS.PY) ***
+# FUNCIÓN DE CARGA GLOBAL
 # --------------------------------------------------------------------
 
 def download_hf_file(filename):
@@ -67,13 +67,11 @@ def load_global_resources():
     try:
         print("Iniciando descarga y carga optimizada de ARTEFACTOS...")
         
-        # 1. Cargar los 5 Modelos/Objetos
         for key, filename in ARTEFACTS.items():
             path = download_hf_file(filename)
             GLOBAL_RESOURCES[key] = joblib.load(path)
             print(f"✅ Cargado {key}")
 
-        # 2. Descargar el CSV SOLO para obtener su RUTA
         CSV_FILE_PATH = download_hf_file(CSV_FILENAME)
         
         RESOURCES_LOADED = True
@@ -84,7 +82,7 @@ def load_global_resources():
         RESOURCES_LOADED = False
 
 # --------------------------------------------------------------------
-# *** FUNCIONES AUXILIARES ***
+# FUNCIONES AUXILIARES
 # --------------------------------------------------------------------
 
 def generar_grafica_base64(fig):
@@ -96,7 +94,7 @@ def generar_grafica_base64(fig):
 
 
 # -------------------------------------------------------------------------
-# FUNCIÓN DE EJECUCIÓN PRINCIPAL (LLAMADA POR DJANGO VIEW)
+# FUNCIÓN DE EJECUCIÓN PRINCIPAL
 # -------------------------------------------------------------------------
 
 def run_malware_analysis():
@@ -105,7 +103,6 @@ def run_malware_analysis():
     if not RESOURCES_LOADED:
         return {'error': "ERROR: Recursos de ML no cargados.", 'accuracy': 0.0, 'dataframe': []}
 
-    # 1. Cargar y preprocesar la muestra de datos (df_full)
     df_full = None
     try:
         df_full = pd.read_csv(
@@ -122,7 +119,6 @@ def run_malware_analysis():
     except Exception as e:
         return {'error': f"Fallo al cargar la muestra del CSV en Railway: {e}", 'accuracy': 0.0, 'dataframe': []}
     
-    # 2. GENERAR MUESTRA FIJA (df_sample) para GRÁFICAS
     df_safe = df_full.copy()
     
     if len(df_safe) >= N_ROWS_FOR_PLOTS:
@@ -130,7 +126,6 @@ def run_malware_analysis():
     else:
         df_sample = df_safe.copy() 
     
-    # Asignar recursos globales
     model_f1 = GLOBAL_RESOURCES['f1']
     model_reg = GLOBAL_RESOURCES['reg']
     model_clas = GLOBAL_RESOURCES['clas']
@@ -138,7 +133,7 @@ def run_malware_analysis():
     scaler_f1 = GLOBAL_RESOURCES['scaler']
 
     # =========================================================================
-    # PARTE A: CLASIFICACIÓN BINARIA (Calculo F1-Score) - Usa df_safe
+    # PARTE A: CLASIFICACIÓN BINARIA (F1-Score)
     # =========================================================================
     class_counts = df_safe[TARGET_COL_CLS].value_counts()
     top_2_classes = class_counts.index[:2].tolist()
@@ -157,7 +152,7 @@ def run_malware_analysis():
     f1_rounded = round(f1, 4)
 
     # =========================================================================
-    # PARTE B: GRÁFICA 1 - Clasificación SVM - Usa df_sample
+    # PARTE B: GRÁFICA 1 - Clasificación SVM
     # =========================================================================
     top_3_classes = class_counts.index[:3].tolist()
     df_filtered_svm = df_sample[df_sample[TARGET_COL_CLS].isin(top_3_classes)].copy()
@@ -172,7 +167,6 @@ def run_malware_analysis():
     except ValueError:
         return {'error': "Error de LabelEncoder: Muestra con clases desconocidas.", 'accuracy': f1_rounded, 'dataframe': [] }
     
-    # Generar la cuadrícula
     x_min, x_max = X_clas_filt.iloc[:, 0].min() - 0.1, X_clas_filt.iloc[:, 0].max() + 0.1
     y_min, y_max = X_clas_filt.iloc[:, 1].min() - 0.1, X_clas_filt.iloc[:, 1].max() + 0.1
     xx, yy = np.meshgrid(np.linspace(x_min, x_max, 200), np.linspace(y_min, y_max, 200))
@@ -182,7 +176,6 @@ def run_malware_analysis():
     Z = model_clas.predict(grid_data_svc) 
     Z = Z.reshape(xx.shape)
 
-    # Definición de fig1
     fig1, ax1 = plt.subplots(figsize=(10, 8)) 
     ax1.contourf(xx, yy, Z, alpha=0.5, cmap='coolwarm') 
     for i, class_name in enumerate(class_names_svm):
@@ -196,7 +189,7 @@ def run_malware_analysis():
     grafica1_b64 = generar_grafica_base64(fig1) 
 
     # =========================================================================
-    # PARTES C & D: REGRESIÓN - Usa df_sample (CORRECCIÓN FINAL 78/10)
+    # PARTES C & D: REGRESIÓN (SOLUCIÓN DEFINITIVA 78/10)
     # =========================================================================
     y_reg_original = df_sample['Init_Win_bytes_forward'].copy()
     y_reg_original[y_reg_original < 0] = 0
@@ -221,16 +214,17 @@ def run_malware_analysis():
     )
 
     # *** CORRECCIÓN CRÍTICA DE LONGITUD (78 -> 10) ***
-    # Forzamos que el conjunto de prueba de regresión sea de 10 elementos.
     X_test_reg = X_test_reg.head(10)
     y_test_reg_transf = y_test_reg_transf.head(10)
     
     # 2. DATOS CRUDOS PARA LA SUPERFICIE 3D (Sección más probable del error 78/10)
-    # Creamos una muestra de 10 filas de los datos crudos para el JSON
-    X_reg_top_10 = X_reg_top.head(10) 
-    y_reg_transformed_10 = y_reg_transformed.head(10)
+    # Se genera una muestra de 10 filas del DataFrame base para asegurar la coincidencia
+    # con la longitud de la tabla de salida.
+    df_sample_10 = df_sample.head(10)
+    X_reg_top_10 = df_sample_10[top_2_features]
+    y_reg_transformed_10 = np.log1p(df_sample_10['Init_Win_bytes_forward'].apply(lambda x: max(0, x)))
 
-    # Generar cuadrícula y predecir para la malla (sigue usando 500 filas para min/max)
+    # Generar cuadrícula y predecir para la malla
     x_min_r, x_max_r = X_reg_top.iloc[:, 0].min() - 0.5, X_reg_top.iloc[:, 0].max() + 0.5
     y_min_r, y_max_r = X_reg_top.iloc[:, 1].min() - 0.5, X_reg_top.iloc[:, 1].max() + 0.5
     xx_r, yy_r = np.meshgrid(np.linspace(x_min_r, x_max_r, 50), np.linspace(y_min_r, y_max_r, 50))
@@ -239,7 +233,7 @@ def run_malware_analysis():
 
     Z_reg = model_reg.predict(grid_data) 
 
-    # Los campos 'x_data', 'y_data', 'y_data_class' ahora son de longitud 10
+    # Los campos 'x_data', 'y_data', 'y_data_class' usan la muestra df_sample_10 (longitud 10)
     regression_data_surface = {
         'x_feature': top_2_features[0], 'y_feature': top_2_features[1],
         'x_line': xx_r.flatten().tolist(), 
@@ -264,8 +258,9 @@ def run_malware_analysis():
     ax3.grid(True, linestyle='--', alpha=0.6)
     grafica3_b64 = generar_grafica_base64(fig3)
 
-    # 3. Preparación de Salida Final (10 filas)
-    df_sample_head = df_safe.head(10).to_dict('records') 
+    # 3. Preparación de Salida Final (AHORA USA LA MISMA MUESTRA df_sample_10)
+    # Esto garantiza que el frontend tenga datos de longitud 10 para la tabla
+    df_sample_head = df_sample_10.to_dict('records') 
 
     return {
         'accuracy': f1_rounded, 
