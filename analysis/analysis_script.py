@@ -12,7 +12,7 @@ import base64
 import matplotlib
 from django.conf import settings 
 
-# CONFIGURACIÓN DE PLOT Y RUTAS (Se mantiene para la estructura, pero no se usa)
+# CONFIGURACIÓN DE PLOT Y RUTAS (Se mantiene para la estructura de Django)
 matplotlib.use('Agg')
 plt.style.use('default') 
 
@@ -22,7 +22,7 @@ HF_REPO_TYPE = "dataset"
 CSV_FILENAME = 'TotalFeatures-ISCXFlowMeter.csv'
 
 # MUESTRAS SIMPLIFICADAS: 
-N_ROWS_FOR_F1 = 20000 # Reducido para evitar problemas de memoria/timeout
+N_ROWS_FOR_F1 = 20000 # Recomendado para evitar fallos de memoria/timeout
 N_ROWS_FOR_PLOTS = 10 # Fijo en 10 para la Tabla de datos
 
 # SOLO NECESITAMOS LOS MODELOS PARA F1-SCORE
@@ -82,11 +82,11 @@ def load_global_resources():
         RESOURCES_LOADED = False
 
 # --------------------------------------------------------------------
-# FUNCIÓN AUXILIAR VACÍA (para mantener la compatibilidad con Matplotlib)
+# FUNCIÓN AUXILIAR VACÍA 
 # --------------------------------------------------------------------
 
 def generar_grafica_base64(fig):
-    """Función de dummy, no genera gráfica real."""
+    """Función de dummy para evitar fallos de Matplotlib."""
     plt.close(fig)
     return ""
 
@@ -95,7 +95,7 @@ def generar_grafica_base64(fig):
 # -------------------------------------------------------------------------
 
 def run_malware_analysis():
-    """Usa los modelos cargados para calcular solo el F1-Score."""
+    """Usa los modelos cargados para calcular solo el F1-Score y la Tabla."""
     
     if not RESOURCES_LOADED:
         return {'error': "ERROR: Recursos de ML no cargados.", 'accuracy': 0.0, 'dataframe': []}
@@ -131,16 +131,21 @@ def run_malware_analysis():
     class_counts = df_safe[TARGET_COL_CLS].value_counts()
     top_2_classes = class_counts.index[:2].tolist()
     
-    # Manejo seguro si no hay al menos dos clases (aunque es improbable en la muestra grande)
+    # Manejo seguro si no hay al menos dos clases
     if len(top_2_classes) < 2:
         f1_rounded = 0.0
     else:
         df_filtered_cls_f1 = df_safe[df_safe[TARGET_COL_CLS].isin(top_2_classes)].copy()
+        
+        # Mapeo de clases a 0 y 1
         class_map = {top_2_classes[0]: 0, top_2_classes[1]: 1} 
         df_filtered_cls_f1['target_binary'] = df_filtered_cls_f1[TARGET_COL_CLS].map(class_map)
+        
         y_cls_f1 = df_filtered_cls_f1['target_binary']
         X_cls_f1 = df_filtered_cls_f1[FEATURES_CLS_ALL].copy()
-        X_cls_f1.replace([np.inf, -np.inf], 0, inplace=True) 
+        
+        # LIMPIEZA EXTREMA: Fundamental para evitar F1 = 0 por incompatibilidad del Scaler
+        X_cls_f1.replace([np.inf, -np.inf, np.nan], 0, inplace=True) 
         
         # Split de datos
         X_train_f1, X_test_f1, y_train_f1, y_test_f1 = train_test_split(X_cls_f1, y_cls_f1, test_size=0.4, random_state=42)
@@ -148,8 +153,13 @@ def run_malware_analysis():
         # Inferencia y cálculo de F1
         X_test_scaled_f1 = scaler_f1.transform(X_test_f1)
         y_pred_f1 = model_f1.predict(X_test_scaled_f1)
-        f1 = f1_score(y_test_f1, y_pred_f1, average='binary') 
-        f1_rounded = round(f1, 4)
+        
+        # Verificación final para evitar errores de F1-Score 
+        if len(y_test_f1.unique()) < 2 or len(y_pred_f1) == 0:
+             f1_rounded = 0.0
+        else:
+             f1 = f1_score(y_test_f1, y_pred_f1, average='binary') 
+             f1_rounded = round(f1, 4)
 
     # 3. Preparación de Salida Final (Tabla de 10 filas)
     df_sample_head = df_sample_10.to_dict('records') 
