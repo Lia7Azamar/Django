@@ -107,7 +107,9 @@
 
                 if (!response.ok) {
                     const errorJson = await response.json();
-                    throw new Error(`Error HTTP: ${response.status}. Mensaje: ${errorJson.message || 'Error desconocido'}`);
+                    // Intentar obtener el mensaje de error del backend
+                    const errorMessage = errorJson.message || errorJson.error || 'Error desconocido';
+                    throw new Error(`Error HTTP: ${response.status}. Mensaje: Error al ejecutar ML: ${errorMessage}`);
                 }
 
                 const data = await response.json();
@@ -127,7 +129,15 @@
 
 
                 // 4. Renderizar la Gráfica 2 (Superficie de Regresión - Chart.js)
-                renderRegressionSurfaceChart(data.regressionData);
+                // Usar un bloque try-catch para atrapar el error de JavaScript 78/10 aquí
+                try {
+                    renderRegressionSurfaceChart(data.regressionData);
+                } catch(e) {
+                    console.error("Error al renderizar Gráfica de Superficie (Posiblemente error 78/10 en indexación):", e);
+                    // Opcional: mostrar un mensaje de error en el contenedor
+                    document.getElementById('regressionSurfaceChart').parentElement.innerHTML = '<p class="text-red-500 text-center">Error al renderizar la Gráfica de Superficie. Ver consola.</p>';
+                }
+
 
                 // 5. Renderizar el DataFrame (Tu función original)
                 renderDataFrame(data.dataframe);
@@ -151,16 +161,26 @@
         function renderRegressionSurfaceChart(regressionData) {
             const ctx = document.getElementById('regressionSurfaceChart').getContext('2d');
             
-            // 1. Datos para la Superficie (Mapa de Color)
+            // --- VERIFICACIÓN CRÍTICA DE SEGURIDAD ---
+            if (!regressionData || !regressionData.x_line || !regressionData.x_data || !regressionData.y_data || !regressionData.y_data_class) {
+                console.warn("Faltan datos de regresión. No se puede renderizar la superficie.");
+                throw new Error("Datos de regresión incompletos.");
+            }
+            
+            // La longitud que esperamos es 10 para los puntos reales (lo que solucionamos en Python)
+            const realDataLength = regressionData.x_data.length;
+
+            // 1. Datos para la Superficie (Mapa de Color) - Longitud 2500
             const surfacePoints = regressionData.x_line.map((x, index) => ({
                 x: x,
                 y: regressionData.y_line[index],
                 z: regressionData.z_line[index] // Valor predicho de regresión
             }));
             
-            // 2. Datos para los Puntos Reales (Scatter)
-            const dataPoints = regressionData.x_data.map((x, index) => ({
-                x: x,
+            // 2. Datos para los Puntos Reales (Scatter) - Longitud 10
+            // ** CORRECCIÓN 78/10 **: Iteramos sobre un array de índices basado en la longitud de x_data (que es 10)
+            const dataPoints = Array.from({ length: realDataLength }).map((_, index) => ({
+                x: regressionData.x_data[index],
                 y: regressionData.y_data[index],
                 value: regressionData.y_data_class[index] // Valor real (para colorear)
             }));
