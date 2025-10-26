@@ -20,8 +20,12 @@ plt.style.use('default')
 HF_REPO_ID = "Lia896gh/csv" 
 HF_REPO_TYPE = "dataset" 
 CSV_FILENAME = 'TotalFeatures-ISCXFlowMeter.csv'
-N_ROWS_FOR_F1 = 500000 
-N_ROWS_FOR_PLOTS = 500 # Muestra fija para evitar el error 78/10
+
+# **OPTIMIZACIÓN MEMORIA:** Reducido a 100k filas para F1-Score
+N_ROWS_FOR_F1 = 100000 
+
+# **SOLUCIÓN ERROR 78/10:** Muestra fija para las gráficas 2D
+N_ROWS_FOR_PLOTS = 500 
 
 ARTEFACTS = {
     'f1': 'model_f1.joblib', 'reg': 'model_reg.joblib', 
@@ -76,7 +80,6 @@ def load_global_resources():
         print("Recursos de ML listos para el despliegue.")
 
     except Exception as e:
-        # Esto captura el error si la descarga o carga falla, lo imprime y marca el fallo
         print(f"ERROR FATAL AL CARGAR RECURSOS: {e}") 
         RESOURCES_LOADED = False
 
@@ -100,7 +103,6 @@ def run_malware_analysis():
     """Usa los modelos cargados y datos bajo demanda para generar resultados."""
     
     if not RESOURCES_LOADED:
-        # Lanza el error que viste si la carga inicial falló
         return {'error': "ERROR: Recursos de ML no cargados.", 'accuracy': 0.0, 'dataframe': []}
 
     # 1. Cargar y preprocesar la muestra de datos (df_full)
@@ -120,7 +122,7 @@ def run_malware_analysis():
     except Exception as e:
         return {'error': f"Fallo al cargar la muestra del CSV en Railway: {e}", 'accuracy': 0.0, 'dataframe': []}
     
-    # 2. GENERAR MUESTRA FIJA (df_sample) para GRÁFICAS
+    # 2. GENERAR MUESTRA FIJA (df_sample) para GRÁFICAS (CORRECCIÓN 78/10)
     df_safe = df_full.copy()
     
     if len(df_safe) >= N_ROWS_FOR_PLOTS:
@@ -155,7 +157,7 @@ def run_malware_analysis():
     f1_rounded = round(f1, 4)
 
     # =========================================================================
-    # PARTE B: GRÁFICA 1 - Clasificación SVM - Usa df_sample (CORREGIDO)
+    # PARTE B: GRÁFICA 1 - Clasificación SVM - Usa df_sample (COMPLETO)
     # =========================================================================
     top_3_classes = class_counts.index[:3].tolist()
     df_filtered_svm = df_sample[df_sample[TARGET_COL_CLS].isin(top_3_classes)].copy()
@@ -194,7 +196,7 @@ def run_malware_analysis():
     grafica1_b64 = generar_grafica_base64(fig1) 
 
     # =========================================================================
-    # PARTES C & D: REGRESIÓN - Usa df_sample (CORREGIDO)
+    # PARTES C & D: REGRESIÓN - Usa df_sample (COMPLETO)
     # =========================================================================
     y_reg_original = df_sample['Init_Win_bytes_forward'].copy()
     y_reg_original[y_reg_original < 0] = 0
@@ -226,6 +228,7 @@ def run_malware_analysis():
 
     Z_reg = model_reg.predict(grid_data) 
 
+    # 'regressionData' (la parte que genera el error 78/10 si df_sample no es fijo)
     regression_data_surface = {
         'x_feature': top_2_features[0], 'y_feature': top_2_features[1],
         'x_line': xx_r.flatten().tolist(), 'y_line': yy_r.flatten().tolist(),           
@@ -253,7 +256,9 @@ def run_malware_analysis():
     df_sample_head = df_safe.head(10).to_dict('records') 
 
     return {
-        'accuracy': f1_rounded, 'dataframe': df_sample_head,
-        'grafica1_b64': grafica1_b64, 'grafica3_b64': grafica3_b64, 
+        'accuracy': f1_rounded, 
+        'dataframe': df_sample_head,
+        'grafica1_b64': grafica1_b64, 
+        'grafica3_b64': grafica3_b64, 
         'regressionData': regression_data_surface
     }
