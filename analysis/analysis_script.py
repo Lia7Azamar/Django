@@ -18,17 +18,21 @@ matplotlib.use('Agg')
 plt.style.use('default') 
 
 # --- CONFIGURACIÓN DE HUGGING FACE ---
-# REPO ID CORREGIDO USANDO LA URL PROPORCIONADA
 HF_REPO_ID = "Lia896gh/csv" 
+HF_REPO_TYPE = "dataset" # Tipo de repositorio (dataset, no model)
 
-# --- NOMBRES DE ARCHIVOS EN EL REPOSITORIO DE HF ---
+# --- NOMBRES Y RUTAS DE ARCHIVOS EN EL REPOSITORIO DE HF ---
+# ¡CRÍTICO! Tus archivos están en una subcarpeta llamada 'main' dentro del repo
+HF_SUBFOLDER = "" # Dejar vacío si solo quieres buscar el nombre del archivo
+# HF_SUBFOLDER = "main" # Descomentar si los archivos están en una subcarpeta llamada 'main'
+
 MODEL_F1_FILENAME = 'model_f1.joblib'
 MODEL_REG_FILENAME = 'model_reg.joblib'
 MODEL_SVM_FILENAME = 'model_svm.joblib'
 LE_CLAS_FILENAME = 'le_clas.joblib'
 CSV_FILENAME = 'TotalFeatures-ISCXFlowMeter.csv'
 
-# Columnas mínimas necesarias para todas las operaciones (clasificación y regresión)
+# Columnas mínimas necesarias
 COLUMNS_NEEDED_FOR_ML = [
     'calss', 'duration', 'total_fpackets', 'total_bpktl', 
     'min_fpktl', 'mean_fiat', 'flowPktsPerSecond', 'min_active', 
@@ -51,7 +55,6 @@ def optimize_dataframe_memory(df):
             c_min = df[col].min()
             c_max = df[col].max()
             
-            # Convertir a INTs más pequeños
             if str(df[col].dtype)[:3] == 'int':
                 if c_min > np.iinfo(np.int8).min and c_max < np.iinfo(np.int8).max:
                     df[col] = df[col].astype(np.int8)
@@ -60,7 +63,6 @@ def optimize_dataframe_memory(df):
                 elif c_min > np.iinfo(np.int32).min and c_max < np.iinfo(np.int32).max:
                     df[col] = df[col].astype(np.int32)    
             
-            # Convertir a FLOATs más pequeños
             elif str(df[col].dtype)[:5] == 'float':
                 if c_min > np.finfo(np.float32).min and c_max < np.finfo(np.float32).max:
                     df[col] = df[col].astype(np.float32)
@@ -81,16 +83,30 @@ RESOURCES_LOADED = False
 
 # Función auxiliar para descargar un archivo de Hugging Face
 def download_hf_file(filename):
-    print(f"Descargando {filename} de Hugging Face...")
-    # hf_hub_download maneja el almacenamiento en caché
-    return hf_hub_download(repo_id=HF_REPO_ID, filename=filename, local_dir=RESOURCES_DIR)
+    # Combina la posible subcarpeta con el nombre del archivo
+    file_path_in_repo = os.path.join(HF_SUBFOLDER, filename)
+    print(f"Descargando {file_path_in_repo} de Hugging Face (ID: {HF_REPO_ID}, Tipo: {HF_REPO_TYPE})...")
+    
+    return hf_hub_download(
+        repo_id=HF_REPO_ID, 
+        filename=file_path_in_repo, # <--- Usa la ruta completa dentro del repositorio
+        local_dir=RESOURCES_DIR,
+        repo_type=HF_REPO_TYPE
+    )
 
 try:
-    # 1. DESCARGA Y CARGA DE DATOS (Optimizada para Memoria)
-    CSV_FILE_PATH = download_hf_file(CSV_FILENAME)
-    N_ROWS_TO_LOAD = 10000 
+    # 1. DESCARGA A CACHÉ
+    print(f"Iniciando descarga y lectura optimizada desde Hugging Face: {HF_REPO_ID}")
     
-    print(f"Leyendo las primeras {N_ROWS_TO_LOAD} filas y columnas específicas del CSV descargado.")
+    # 1a. Descargar todos los archivos a la caché local primero
+    CSV_FILE_PATH = download_hf_file(CSV_FILENAME)
+    MODEL_F1_PATH = download_hf_file(MODEL_F1_FILENAME)
+    MODEL_REG_PATH = download_hf_file(MODEL_REG_FILENAME)
+    MODEL_SVM_PATH = download_hf_file(MODEL_SVM_FILENAME)
+    LE_CLAS_PATH = download_hf_file(LE_CLAS_FILENAME)
+
+    # 1b. Cargar CSV con optimización (Límite de 10,000 filas)
+    N_ROWS_TO_LOAD = 10000 
     
     df_temp = pd.read_csv(
         CSV_FILE_PATH,
@@ -101,11 +117,7 @@ try:
     # Preprocesamiento inicial
     df_temp.columns = df_temp.columns.str.strip()
     df_temp.columns = [col.replace("calss", "Class") for col in df_temp.columns] 
-    
-    # Manejo robusto de la columna target
     target_col_name = 'Class' 
-    if target_col_name not in df_temp.columns:
-         raise ValueError(f"Columna objetivo '{target_col_name}' no encontrada en los datos cargados.")
 
     # Convertir a numérico y manejar infinitos/NaNs
     for col in df_temp.columns:
@@ -116,12 +128,7 @@ try:
     df_temp = optimize_dataframe_memory(df_temp)
     GLOBAL_DF = df_temp
     
-    # 2. DESCARGA Y CARGA DE MODELOS
-    MODEL_F1_PATH = download_hf_file(MODEL_F1_FILENAME)
-    MODEL_REG_PATH = download_hf_file(MODEL_REG_FILENAME)
-    MODEL_SVM_PATH = download_hf_file(MODEL_SVM_FILENAME)
-    LE_CLAS_PATH = download_hf_file(LE_CLAS_FILENAME)
-
+    # 1c. Cargar Modelos (desde la caché local)
     GLOBAL_MODEL_F1 = joblib.load(MODEL_F1_PATH)
     GLOBAL_MODEL_REG = joblib.load(MODEL_REG_PATH)
     GLOBAL_MODEL_CLAS = joblib.load(MODEL_SVM_PATH)
@@ -132,7 +139,7 @@ try:
 
 except Exception as e:
     # Este catch es robusto y reportará cualquier error de conexión, FileNotFoundError, o ValueError
-    print(f"ERROR FATAL: Fallo al cargar recursos desde HugGING FACE debido a: {e}")
+    print(f"ERROR FATAL: Fallo al cargar recursos (Timeout/Memoria/Ruta de Archivo) debido a: {e}")
     
 
 # Función auxiliar para convertir gráficas a base64
@@ -276,7 +283,6 @@ def run_malware_analysis():
     if len(X_reg.columns) < 2:
         print("ADVERTENCIA: Saltando Gráfica 2 y 3, no hay suficientes columnas para X_reg.")
     else:
-        # Aquí se asume que model_reg es un RandomForestRegressor con feature_importances_
         feature_importances = pd.Series(model_reg.feature_importances_, index=X_reg.columns)
         top_2_features = feature_importances.nlargest(2).index.tolist()
         
