@@ -215,21 +215,22 @@ def run_malware_analysis():
     X_reg_top = X_reg[top_2_features]
     X_reg_top.replace([np.inf, -np.inf], 0, inplace=True)
     
+    # 1. DIVISIÓN PARA GRÁFICA 3
     X_train_reg, X_test_reg, y_train_reg_transf, y_test_reg_transf = train_test_split(
         X_reg_top, y_reg_transformed, test_size=0.3, random_state=42
     )
 
-    # *** APLICACIÓN DE CORRECCIÓN DE LONGITUD (78 -> 10) ***
+    # *** CORRECCIÓN CRÍTICA DE LONGITUD (78 -> 10) ***
     # Forzamos que el conjunto de prueba de regresión sea de 10 elementos.
-    # Esto soluciona el desajuste de longitud con la muestra de cabecera (df_safe.head(10)).
     X_test_reg = X_test_reg.head(10)
     y_test_reg_transf = y_test_reg_transf.head(10)
-    # ✅ ADICIÓN: También limitar X_reg_top y y_reg_transformed a 10 para mantener coherencia
-    X_reg_top = X_reg_top.head(10)
-    y_reg_transformed = y_reg_transformed.head(10)
-    # --------------------------------------------------------
+    
+    # 2. DATOS CRUDOS PARA LA SUPERFICIE 3D (Sección más probable del error 78/10)
+    # Creamos una muestra de 10 filas de los datos crudos para el JSON
+    X_reg_top_10 = X_reg_top.head(10) 
+    y_reg_transformed_10 = y_reg_transformed.head(10)
 
-    # Generar cuadrícula y predecir
+    # Generar cuadrícula y predecir para la malla (sigue usando 500 filas para min/max)
     x_min_r, x_max_r = X_reg_top.iloc[:, 0].min() - 0.5, X_reg_top.iloc[:, 0].max() + 0.5
     y_min_r, y_max_r = X_reg_top.iloc[:, 1].min() - 0.5, X_reg_top.iloc[:, 1].max() + 0.5
     xx_r, yy_r = np.meshgrid(np.linspace(x_min_r, x_max_r, 50), np.linspace(y_min_r, y_max_r, 50))
@@ -238,18 +239,20 @@ def run_malware_analysis():
 
     Z_reg = model_reg.predict(grid_data) 
 
+    # Los campos 'x_data', 'y_data', 'y_data_class' ahora son de longitud 10
     regression_data_surface = {
         'x_feature': top_2_features[0], 'y_feature': top_2_features[1],
-        'x_line': xx_r.flatten().tolist(), 'y_line': yy_r.flatten().tolist(),           
+        'x_line': xx_r.flatten().tolist(), 
+        'y_line': yy_r.flatten().tolist(),           
         'z_line': Z_reg.flatten().tolist(), 
-        'x_data': X_reg_top.iloc[:, 0].tolist(), 
-        'y_data': X_reg_top.iloc[:, 1].tolist(), 
-        'y_data_class': y_reg_transformed.tolist()
+        'x_data': X_reg_top_10.iloc[:, 0].tolist(), 
+        'y_data': X_reg_top_10.iloc[:, 1].tolist(), 
+        'y_data_class': y_reg_transformed_10.tolist() 
     }
     
     y_pred_reg_transf = model_reg.predict(X_test_reg)
     
-    # Definición de fig3 (ahora usa 10 puntos de datos)
+    # Definición de fig3
     fig3, ax3 = plt.subplots(figsize=(10, 8)) 
     ax3.scatter(y_test_reg_transf, y_pred_reg_transf, alpha=0.6, color='#5B21B6') 
     min_val = min(y_test_reg_transf.min(), y_pred_reg_transf.min())
