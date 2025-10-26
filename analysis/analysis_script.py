@@ -12,7 +12,7 @@ import base64
 import matplotlib
 from django.conf import settings 
 
-# CONFIGURACIÓN DE PLOT Y RUTAS
+# CONFIGURACIÓN DE PLOT Y RUTAS (Se mantiene para la estructura, pero no se usa)
 matplotlib.use('Agg')
 plt.style.use('default') 
 
@@ -23,15 +23,13 @@ CSV_FILENAME = 'TotalFeatures-ISCXFlowMeter.csv'
 
 # MUESTRAS SIMPLIFICADAS: 
 N_ROWS_FOR_F1 = 20000 # Reducido para evitar problemas de memoria/timeout
-N_ROWS_FOR_PLOTS = 10 # Fijo en 10 para la visualización (Gráfica 1 y Tabla)
+N_ROWS_FOR_PLOTS = 10 # Fijo en 10 para la Tabla de datos
 
+# SOLO NECESITAMOS LOS MODELOS PARA F1-SCORE
 ARTEFACTS = {
     'f1': 'model_f1.joblib', 
-    'clas': 'model_svm.joblib', 
-    'le': 'le_clas.joblib',
     'scaler': 'scaler_f1.joblib' 
 }
-# Solo se cargan los modelos de Clasificación.
 
 RESOURCES_DIR = os.path.join(settings.BASE_DIR, 'hf_cache')
 os.makedirs(RESOURCES_DIR, exist_ok=True)
@@ -68,6 +66,7 @@ def load_global_resources():
     try:
         print("Iniciando descarga y carga optimizada de ARTEFACTOS...")
         
+        # SOLO CARGA F1 Y SCALER
         for key, filename in ARTEFACTS.items():
             path = download_hf_file(filename)
             GLOBAL_RESOURCES[key] = joblib.load(path)
@@ -83,29 +82,27 @@ def load_global_resources():
         RESOURCES_LOADED = False
 
 # --------------------------------------------------------------------
-# FUNCIONES AUXILIARES
+# FUNCIÓN AUXILIAR VACÍA (para mantener la compatibilidad con Matplotlib)
 # --------------------------------------------------------------------
 
 def generar_grafica_base64(fig):
-    """Guarda una figura de Matplotlib en un buffer y la codifica a Base64."""
-    buf = io.BytesIO()
-    fig.savefig(buf, format='png', bbox_inches='tight', facecolor='white') 
+    """Función de dummy, no genera gráfica real."""
     plt.close(fig)
-    return base64.b64encode(buf.getvalue()).decode('utf-8')
-
+    return ""
 
 # -------------------------------------------------------------------------
 # FUNCIÓN DE EJECUCIÓN PRINCIPAL
 # -------------------------------------------------------------------------
 
 def run_malware_analysis():
-    """Usa los modelos cargados y datos bajo demanda para generar resultados."""
+    """Usa los modelos cargados para calcular solo el F1-Score."""
     
     if not RESOURCES_LOADED:
         return {'error': "ERROR: Recursos de ML no cargados.", 'accuracy': 0.0, 'dataframe': []}
 
     df_full = None
     try:
+        # Carga solo la muestra necesaria para el cálculo del F1
         df_full = pd.read_csv(
             CSV_FILE_PATH, nrows=N_ROWS_FOR_F1, usecols=COLUMNS_NEEDED_FOR_ML
         )
@@ -118,118 +115,50 @@ def run_malware_analysis():
         df_full.replace([np.inf, -np.inf, np.nan], 0, inplace=True)
 
     except Exception as e:
-        return {'error': f"Fallo al cargar la muestra del CSV en Railway: {e}", 'accuracy': 0.0, 'dataframe': []}
+        return {'error': f"Fallo al cargar la muestra del CSV: {e}", 'accuracy': 0.0, 'dataframe': []}
     
     df_safe = df_full.copy()
     
-    # *** MUESTRA UNIFICADA DE 10 FILAS PARA VISUALIZACIÓN ***
+    # *** MUESTRA UNIFICADA DE 10 FILAS PARA TABLA ***
     df_sample_10 = df_safe.head(N_ROWS_FOR_PLOTS).copy() 
     
     model_f1 = GLOBAL_RESOURCES['f1']
-    model_clas = GLOBAL_RESOURCES['clas']
-    le_clas = GLOBAL_RESOURCES['le']
     scaler_f1 = GLOBAL_RESOURCES['scaler']
 
     # =========================================================================
-    # PARTE A: CLASIFICACIÓN BINARIA (F1-Score)
+    # PARTE A: CLASIFICACIÓN BINARIA (Cálculo de F1-Score)
     # =========================================================================
     class_counts = df_safe[TARGET_COL_CLS].value_counts()
     top_2_classes = class_counts.index[:2].tolist()
-    df_filtered_cls_f1 = df_safe[df_safe[TARGET_COL_CLS].isin(top_2_classes)].copy()
-    class_map = {top_2_classes[0]: 0, top_2_classes[1]: 1} 
-    df_filtered_cls_f1['target_binary'] = df_filtered_cls_f1[TARGET_COL_CLS].map(class_map)
-    y_cls_f1 = df_filtered_cls_f1['target_binary']
-    X_cls_f1 = df_filtered_cls_f1[FEATURES_CLS_ALL].copy()
-    X_cls_f1.replace([np.inf, -np.inf], 0, inplace=True) 
     
-    X_train_f1, X_test_f1, y_train_f1, y_test_f1 = train_test_split(X_cls_f1, y_cls_f1, test_size=0.4, random_state=42)
-    
-    X_test_scaled_f1 = scaler_f1.transform(X_test_f1)
-    y_pred_f1 = model_f1.predict(X_test_scaled_f1)
-    f1 = f1_score(y_test_f1, y_pred_f1, average='binary') 
-    f1_rounded = round(f1, 4)
-
-    # =========================================================================
-    # PARTE B: GRÁFICA 1 - Clasificación SVM (Muestra de 10 filas)
-    # SOLUCIÓN FINAL AL LIST INDEX OUT OF RANGE
-    # =========================================================================
-    
-    # 1. Obtenemos solo las clases que el LabelEncoder (le_clas) conoce
-    known_classes = le_clas.classes_.tolist()
-    
-    # Filtramos la muestra de 10 filas para solo incluir clases conocidas
-    df_filtered_svm = df_sample_10[df_sample_10[TARGET_COL_CLS].isin(known_classes)].copy()
-    
-    # Manejo de fallback si la muestra es demasiado pequeña o solo tiene 1 clase.
-    if df_filtered_svm.empty or len(df_filtered_svm[TARGET_COL_CLS].unique()) < 2:
-        print("ADVERTENCIA: Datos insuficientes para Gráfica 1. Usando fallback.")
-        fig1, ax1 = plt.subplots(figsize=(10, 8))
-        ax1.text(0.5, 0.5, "Datos Insuficientes para Gráfica 1", ha='center', va='center', fontsize=16, color='red')
-        grafica1_b64 = generar_grafica_base64(fig1)
+    # Manejo seguro si no hay al menos dos clases (aunque es improbable en la muestra grande)
+    if len(top_2_classes) < 2:
+        f1_rounded = 0.0
+    else:
+        df_filtered_cls_f1 = df_safe[df_safe[TARGET_COL_CLS].isin(top_2_classes)].copy()
+        class_map = {top_2_classes[0]: 0, top_2_classes[1]: 1} 
+        df_filtered_cls_f1['target_binary'] = df_filtered_cls_f1[TARGET_COL_CLS].map(class_map)
+        y_cls_f1 = df_filtered_cls_f1['target_binary']
+        X_cls_f1 = df_filtered_cls_f1[FEATURES_CLS_ALL].copy()
+        X_cls_f1.replace([np.inf, -np.inf], 0, inplace=True) 
         
-        return {
-            'accuracy': f1_rounded, 
-            'dataframe': df_sample_10.to_dict('records'),
-            'grafica1_b64': grafica1_b64, 
-            'grafica3_b64': "", 
-            'regressionData': {}
-        }
+        # Split de datos
+        X_train_f1, X_test_f1, y_train_f1, y_test_f1 = train_test_split(X_cls_f1, y_cls_f1, test_size=0.4, random_state=42)
         
-    X_clas_filt = df_filtered_svm[['min_flowpktl', 'flow_fin']].copy()
-    
-    X_clas_filt['min_flowpktl'] = np.log1p(X_clas_filt['min_flowpktl'])
-    X_clas_filt['flow_fin'] = np.log1p(X_clas_filt['flow_fin'])
-    
-    # TRANSFORMACIÓN SEGURA
-    y_clas_encoded = le_clas.transform(df_filtered_svm[TARGET_COL_CLS])
-    class_names_svm = le_clas.classes_
-    
-    
-    # Generación de Malla y Frontera 
-    x_min = X_clas_filt.iloc[:, 0].min()
-    x_max = X_clas_filt.iloc[:, 0].max()
-    y_min = X_clas_filt.iloc[:, 1].min()
-    y_max = X_clas_filt.iloc[:, 1].max()
-    
-    x_min, x_max = x_min - 0.1, x_max + 0.1
-    y_min, y_max = y_min - 0.1, y_max + 0.1
-    
-    xx, yy = np.meshgrid(np.linspace(x_min, x_max, 200), np.linspace(y_min, y_max, 200))
-    feature_names = X_clas_filt.columns
-    grid_data_svc = pd.DataFrame(np.c_[xx.ravel(), yy.ravel()], columns=feature_names) 
+        # Inferencia y cálculo de F1
+        X_test_scaled_f1 = scaler_f1.transform(X_test_f1)
+        y_pred_f1 = model_f1.predict(X_test_scaled_f1)
+        f1 = f1_score(y_test_f1, y_pred_f1, average='binary') 
+        f1_rounded = round(f1, 4)
 
-    Z = model_clas.predict(grid_data_svc) 
-    Z = Z.reshape(xx.shape)
-
-    fig1, ax1 = plt.subplots(figsize=(10, 8)) 
-    ax1.contourf(xx, yy, Z, alpha=0.5, cmap='coolwarm') 
-    
-    # GRAFICAR PUNTOS: Bucle CRÍTICO, itera solo sobre los índices presentes.
-    for i in np.unique(y_clas_encoded):
-        class_name = class_names_svm[i] 
-        ax1.scatter(X_clas_filt.iloc[y_clas_encoded == i, 0], X_clas_filt.iloc[y_clas_encoded == i, 1],
-                    edgecolors='k', s=60, label=f'Clase: {class_name}', alpha=0.8)
-    
-    ax1.set_title('Gráfica 1: Separabilidad de Datos con SVM (Log Transformación)', fontsize=14)
-    ax1.set_xlabel('Característica: log(1 + min_flowpktl)', fontsize=12) 
-    ax1.set_ylabel('Característica: log(1 + flow_fin)', fontsize=12)
-    ax1.legend(loc='upper right', fontsize=10)
-    ax1.grid(True, linestyle='--', alpha=0.6)
-    grafica1_b64 = generar_grafica_base64(fig1) 
-
-    # =========================================================================
-    # PARTES C & D: REGRESIÓN - ELIMINADAS.
-    # =========================================================================
-    grafica3_b64 = "" 
-    regression_data_surface = {} 
-
-    # 4. Preparación de Salida Final (Tabla de 10 filas)
+    # 3. Preparación de Salida Final (Tabla de 10 filas)
     df_sample_head = df_sample_10.to_dict('records') 
 
+    # 4. REGRESO DE VALORES MÍNIMOS (Gráficas vacías)
     return {
         'accuracy': f1_rounded, 
         'dataframe': df_sample_head,
-        'grafica1_b64': grafica1_b64, 
-        'grafica3_b64': grafica3_b64, 
-        'regressionData': regression_data_surface 
+        'grafica1_b64': "",      # VACÍO
+        'grafica3_b64': "",      # VACÍO
+        'regressionData': {}     # VACÍO
     }
