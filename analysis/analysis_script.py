@@ -221,6 +221,7 @@ def run_malware_analysis():
     # Se genera una muestra de 10 filas del DataFrame base para asegurar la coincidencia
     # con la longitud de la tabla de salida.
     df_sample_10 = df_sample.head(10)
+    # Asegúrate de que las columnas usadas aquí estén en df_sample_10
     X_reg_top_10 = df_sample_10[top_2_features]
     y_reg_transformed_10 = np.log1p(df_sample_10['Init_Win_bytes_forward'].apply(lambda x: max(0, x)))
 
@@ -259,7 +260,6 @@ def run_malware_analysis():
     grafica3_b64 = generar_grafica_base64(fig3)
 
     # 3. Preparación de Salida Final (AHORA USA LA MISMA MUESTRA df_sample_10)
-    # Esto garantiza que el frontend tenga datos de longitud 10 para la tabla
     df_sample_head = df_sample_10.to_dict('records') 
 
     return {
