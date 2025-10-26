@@ -217,9 +217,11 @@ def run_malware_analysis():
     X_test_reg = X_test_reg.head(10)
     y_test_reg_transf = y_test_reg_transf.head(10)
     
-    # 2. DATOS CRUDOS PARA LA SUPERFICIE 3D (Sección más probable del error 78/10)
-    # Se genera una muestra de 10 filas del DataFrame base para asegurar la coincidencia
-    # con la longitud de la tabla de salida.
+    # --- PASO CLAVE: RESETEAR ÍNDICES PARA ELIMINAR EL ERROR 78/10 ---
+    # Convertir a NumPy array sin índices para garantizar que Matplotlib lo trate como una lista simple.
+    y_test_array = y_test_reg_transf.values 
+    
+    # 2. DATOS CRUDOS PARA LA SUPERFICIE 3D 
     df_sample_10 = df_sample.head(10)
     # Asegúrate de que las columnas usadas aquí estén en df_sample_10
     X_reg_top_10 = df_sample_10[top_2_features]
@@ -245,13 +247,18 @@ def run_malware_analysis():
         'y_data_class': y_reg_transformed_10.tolist() 
     }
     
-    y_pred_reg_transf = model_reg.predict(X_test_reg)
+    # 3. Predecir para el array de 10 filas
+    y_pred_reg_transf = model_reg.predict(X_test_reg) # Esta es una lista/array de NumPy (longitud 10)
     
     # Definición de fig3
     fig3, ax3 = plt.subplots(figsize=(10, 8)) 
-    ax3.scatter(y_test_reg_transf, y_pred_reg_transf, alpha=0.6, color='#5B21B6') 
-    min_val = min(y_test_reg_transf.min(), y_pred_reg_transf.min())
-    max_val = max(y_test_reg_transf.max(), y_pred_reg_transf.max())
+    # *** AQUI USAMOS EL ARRAY DE NUMPY (y_test_array) para eliminar el conflicto de índice ***
+    ax3.scatter(y_test_array, y_pred_reg_transf, alpha=0.6, color='#5B21B6') 
+    
+    # El cálculo de min/max también debe usar los arrays
+    min_val = min(y_test_array.min(), y_pred_reg_transf.min())
+    max_val = max(y_test_array.max(), y_pred_reg_transf.max())
+    
     ax3.plot([min_val, max_val], [min_val, max_val], 'r--', lw=2)
     ax3.set_xlabel("Valores Reales (log transformados)", fontsize=12)
     ax3.set_ylabel("Valores Predichos (log transformados)", fontsize=12)
@@ -259,7 +266,7 @@ def run_malware_analysis():
     ax3.grid(True, linestyle='--', alpha=0.6)
     grafica3_b64 = generar_grafica_base64(fig3)
 
-    # 3. Preparación de Salida Final (AHORA USA LA MISMA MUESTRA df_sample_10)
+    # 4. Preparación de Salida Final
     df_sample_head = df_sample_10.to_dict('records') 
 
     return {
