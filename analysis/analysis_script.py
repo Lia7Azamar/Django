@@ -101,7 +101,7 @@ try:
     LE_CLAS_PATH = download_hf_file(LE_CLAS_FILENAME)
 
     # 1b. Cargar CSV con optimización (Aumento de filas CRÍTICO)
-    N_ROWS_TO_LOAD = 50000  # <--- CORRECCIÓN CRÍTICA: 50,000 filas
+    N_ROWS_TO_LOAD = 50000  # Mantener en 50,000
     
     print(f"Leyendo las primeras {N_ROWS_TO_LOAD} filas y columnas específicas del CSV descargado.")
 
@@ -245,8 +245,8 @@ def run_malware_analysis():
              x_min, x_max = X_clas_filt.iloc[:, 0].min() - 0.1, X_clas_filt.iloc[:, 0].max() + 0.1
              y_min, y_max = X_clas_filt.iloc[:, 1].min() - 0.1, X_clas_filt.iloc[:, 1].max() + 0.1
              
-             # CORRECCIÓN CRÍTICA: Reducción de la malla de predicción a 50x50
-             xx, yy = np.meshgrid(np.linspace(x_min, x_max, 50), np.linspace(y_min, y_max, 50)) 
+             # CORRECCIÓN CRÍTICA: Reducción de la malla de predicción a 30x30
+             xx, yy = np.meshgrid(np.linspace(x_min, x_max, 30), np.linspace(y_min, y_max, 30)) 
              
              feature_names = X_clas_filt.columns
              grid_data_svc = pd.DataFrame(np.c_[xx.ravel(), yy.ravel()], columns=feature_names) 
@@ -302,8 +302,8 @@ def run_malware_analysis():
         x_min_r, x_max_r = X_reg_top.iloc[:, 0].min() - 0.5, X_reg_top.iloc[:, 0].max() + 0.5
         y_min_r, y_max_r = X_reg_top.iloc[:, 1].min() - 0.5, X_reg_top.iloc[:, 1].max() + 0.5
         
-        # CORRECCIÓN CRÍTICA: Reducción de la malla de predicción a 20x20
-        xx_r, yy_r = np.meshgrid(np.linspace(x_min_r, x_max_r, 20), np.linspace(y_min_r, y_max_r, 20))
+        # CORRECCIÓN CRÍTICA: Reducción de la malla de predicción a 10x10
+        xx_r, yy_r = np.meshgrid(np.linspace(x_min_r, x_max_r, 10), np.linspace(y_min_r, y_max_r, 10))
         
         grid_data = pd.DataFrame(np.c_[xx_r.ravel(), yy_r.ravel()], columns=top_2_features)
         grid_data.replace([np.inf, -np.inf], 0, inplace=True) 
