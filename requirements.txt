@@ -6,7 +6,7 @@ whitenoise
 # Data Science / Machine Learning
 pandas
 numpy
-scikit-learn
+scikit-learn==1.5.2
 matplotlib
 joblib
 djangorestframework

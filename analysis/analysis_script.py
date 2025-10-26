@@ -21,10 +21,10 @@ HF_REPO_ID = "Lia896gh/csv"
 HF_REPO_TYPE = "dataset" 
 CSV_FILENAME = 'TotalFeatures-ISCXFlowMeter.csv'
 
-# **OPTIMIZACIÓN MEMORIA:** Reducido a 100k filas para F1-Score
+# OPTIMIZACIÓN MEMORIA: Reducido a 100k filas para F1-Score
 N_ROWS_FOR_F1 = 100000 
 
-# **SOLUCIÓN ERROR 78/10:** Muestra fija para las gráficas 2D
+# SOLUCIÓN ERROR 78/10: Muestra fija para las gráficas 2D
 N_ROWS_FOR_PLOTS = 500 
 
 ARTEFACTS = {
@@ -122,7 +122,7 @@ def run_malware_analysis():
     except Exception as e:
         return {'error': f"Fallo al cargar la muestra del CSV en Railway: {e}", 'accuracy': 0.0, 'dataframe': []}
     
-    # 2. GENERAR MUESTRA FIJA (df_sample) para GRÁFICAS (CORRECCIÓN 78/10)
+    # 2. GENERAR MUESTRA FIJA (df_sample) para GRÁFICAS
     df_safe = df_full.copy()
     
     if len(df_safe) >= N_ROWS_FOR_PLOTS:
@@ -157,7 +157,7 @@ def run_malware_analysis():
     f1_rounded = round(f1, 4)
 
     # =========================================================================
-    # PARTE B: GRÁFICA 1 - Clasificación SVM - Usa df_sample (COMPLETO)
+    # PARTE B: GRÁFICA 1 - Clasificación SVM - Usa df_sample
     # =========================================================================
     top_3_classes = class_counts.index[:3].tolist()
     df_filtered_svm = df_sample[df_sample[TARGET_COL_CLS].isin(top_3_classes)].copy()
@@ -196,7 +196,7 @@ def run_malware_analysis():
     grafica1_b64 = generar_grafica_base64(fig1) 
 
     # =========================================================================
-    # PARTES C & D: REGRESIÓN - Usa df_sample (COMPLETO)
+    # PARTES C & D: REGRESIÓN - Usa df_sample (CORRECCIÓN FINAL 78/10)
     # =========================================================================
     y_reg_original = df_sample['Init_Win_bytes_forward'].copy()
     y_reg_original[y_reg_original < 0] = 0
@@ -219,6 +219,13 @@ def run_malware_analysis():
         X_reg_top, y_reg_transformed, test_size=0.3, random_state=42
     )
 
+    # *** APLICACIÓN DE CORRECCIÓN DE LONGITUD (78 -> 10) ***
+    # Forzamos que el conjunto de prueba de regresión sea de 10 elementos.
+    # Esto soluciona el desajuste de longitud con la muestra de cabecera (df_safe.head(10)).
+    X_test_reg = X_test_reg.head(10)
+    y_test_reg_transf = y_test_reg_transf.head(10)
+    # --------------------------------------------------------
+
     # Generar cuadrícula y predecir
     x_min_r, x_max_r = X_reg_top.iloc[:, 0].min() - 0.5, X_reg_top.iloc[:, 0].max() + 0.5
     y_min_r, y_max_r = X_reg_top.iloc[:, 1].min() - 0.5, X_reg_top.iloc[:, 1].max() + 0.5
@@ -228,7 +235,6 @@ def run_malware_analysis():
 
     Z_reg = model_reg.predict(grid_data) 
 
-    # 'regressionData' (la parte que genera el error 78/10 si df_sample no es fijo)
     regression_data_surface = {
         'x_feature': top_2_features[0], 'y_feature': top_2_features[1],
         'x_line': xx_r.flatten().tolist(), 'y_line': yy_r.flatten().tolist(),           
@@ -240,7 +246,7 @@ def run_malware_analysis():
     
     y_pred_reg_transf = model_reg.predict(X_test_reg)
     
-    # Definición de fig3
+    # Definición de fig3 (ahora usa 10 puntos de datos)
     fig3, ax3 = plt.subplots(figsize=(10, 8)) 
     ax3.scatter(y_test_reg_transf, y_pred_reg_transf, alpha=0.6, color='#5B21B6') 
     min_val = min(y_test_reg_transf.min(), y_pred_reg_transf.min())
@@ -252,7 +258,7 @@ def run_malware_analysis():
     ax3.grid(True, linestyle='--', alpha=0.6)
     grafica3_b64 = generar_grafica_base64(fig3)
 
-    # 3. Preparación de Salida Final
+    # 3. Preparación de Salida Final (10 filas)
     df_sample_head = df_safe.head(10).to_dict('records') 
 
     return {
