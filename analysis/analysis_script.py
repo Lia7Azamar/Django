@@ -22,9 +22,8 @@ HF_REPO_TYPE = "dataset"
 CSV_FILENAME = 'TotalFeatures-ISCXFlowMeter.csv'
 
 # MUESTRAS SIMPLIFICADAS: 
-# Usamos un gran número para F1, pero un número fijo y pequeño para las gráficas.
-N_ROWS_FOR_F1 = 100000 
-N_ROWS_FOR_PLOTS = 10 # <<<<<<<<<<<<<< USAMOS SOLO 10 FILAS PARA LAS GRÁFICAS
+N_ROWS_FOR_F1 = 20000 # Reducido para evitar problemas de memoria/timeout
+N_ROWS_FOR_PLOTS = 10 
 
 ARTEFACTS = {
     'f1': 'model_f1.joblib', 'reg': 'model_reg.joblib', 
@@ -66,8 +65,9 @@ def load_global_resources():
     try:
         print("Iniciando descarga y carga optimizada de ARTEFACTOS...")
         
-        for key, filename in ARTEFACTS.items():
-            path = download_hf_file(filename)
+        # Solo necesitamos los modelos f1, clas, le y scaler para este script simplificado
+        for key in ['f1', 'clas', 'le', 'scaler']:
+            path = download_hf_file(ARTEFACTS[key])
             GLOBAL_RESOURCES[key] = joblib.load(path)
             print(f"✅ Cargado {key}")
 
@@ -120,18 +120,16 @@ def run_malware_analysis():
     
     df_safe = df_full.copy()
     
-    # *** PASO CLAVE 1: MUESTRA UNIFICADA DE 10 FILAS ***
-    # Usamos las primeras 10 filas para asegurar que todos los datos de visualización coincidan.
+    # *** MUESTRA UNIFICADA DE 10 FILAS PARA VISUALIZACIÓN ***
     df_sample_10 = df_safe.head(N_ROWS_FOR_PLOTS).copy() 
     
     model_f1 = GLOBAL_RESOURCES['f1']
-    model_reg = GLOBAL_RESOURCES['reg']
     model_clas = GLOBAL_RESOURCES['clas']
     le_clas = GLOBAL_RESOURCES['le']
     scaler_f1 = GLOBAL_RESOURCES['scaler']
 
     # =========================================================================
-    # PARTE A: CLASIFICACIÓN BINARIA (F1-Score) - Usa df_safe (100k filas)
+    # PARTE A: CLASIFICACIÓN BINARIA (F1-Score)
     # =========================================================================
     class_counts = df_safe[TARGET_COL_CLS].value_counts()
     top_2_classes = class_counts.index[:2].tolist()
@@ -150,10 +148,9 @@ def run_malware_analysis():
     f1_rounded = round(f1, 4)
 
     # =========================================================================
-    # PARTE B: GRÁFICA 1 - Clasificación SVM - Usa df_sample_10 (10 filas)
+    # PARTE B: GRÁFICA 1 - Clasificación SVM (Muestra de 10 filas)
     # =========================================================================
     top_3_classes = class_counts.index[:3].tolist()
-    # Usamos la muestra de 10 filas
     df_filtered_svm = df_sample_10[df_sample_10[TARGET_COL_CLS].isin(top_3_classes)].copy()
     X_clas_filt = df_filtered_svm[['min_flowpktl', 'flow_fin']].copy()
     
@@ -164,13 +161,9 @@ def run_malware_analysis():
         y_clas_encoded = le_clas.transform(df_filtered_svm[TARGET_COL_CLS])
         class_names_svm = le_clas.classes_
     except ValueError:
-        # Si la muestra de 10 filas tiene clases que el encoder no conoce, salta el error
-        # Esto es muy poco probable con un head(10) de un dataset grande.
-        print("Advertencia: Clases en la muestra de 10 no cubiertas por LabelEncoder.")
-        class_names_svm = ['A', 'B', 'C'] # Fallback
+        class_names_svm = ['A', 'B', 'C']
         y_clas_encoded = [0] * len(X_clas_filt)
     
-    # Generar la malla para la frontera (usa el rango del df_filtered_svm)
     x_min, x_max = X_clas_filt.iloc[:, 0].min() - 0.1, X_clas_filt.iloc[:, 0].max() + 0.1
     y_min, y_max = X_clas_filt.iloc[:, 1].min() - 0.1, X_clas_filt.iloc[:, 1].max() + 0.1
     xx, yy = np.meshgrid(np.linspace(x_min, x_max, 200), np.linspace(y_min, y_max, 200))
@@ -182,12 +175,9 @@ def run_malware_analysis():
 
     fig1, ax1 = plt.subplots(figsize=(10, 8)) 
     ax1.contourf(xx, yy, Z, alpha=0.5, cmap='coolwarm') 
-    
-    # Iteración segura sobre los puntos
     for i in range(len(class_names_svm)):
         ax1.scatter(X_clas_filt.iloc[y_clas_encoded == i, 0], X_clas_filt.iloc[y_clas_encoded == i, 1],
                     edgecolors='k', s=60, label=f'Clase: {class_names_svm[i]}', alpha=0.8)
-    
     ax1.set_title('Gráfica 1: Separabilidad de Datos con SVM (Log Transformación)', fontsize=14)
     ax1.set_xlabel('Característica: log(1 + min_flowpktl)', fontsize=12) 
     ax1.set_ylabel('Característica: log(1 + flow_fin)', fontsize=12)
@@ -196,85 +186,19 @@ def run_malware_analysis():
     grafica1_b64 = generar_grafica_base64(fig1) 
 
     # =========================================================================
-    # PARTES C & D: REGRESIÓN (SOLUCIÓN DEFINITIVA 78/10) - Usa df_sample_10 (10 filas)
+    # PARTES C & D: REGRESIÓN - ELIMINADAS.
+    # Se regresan valores vacíos para que el frontend no falle.
     # =========================================================================
-    
-    # Datos de entrada/salida para las 10 filas
-    y_reg_original_10 = df_sample_10['Init_Win_bytes_forward'].copy()
-    y_reg_original_10[y_reg_original_10 < 0] = 0
-    y_reg_transformed_10 = np.log1p(y_reg_original_10.replace([np.inf, -np.inf, np.nan], 0))
-    
-    X_reg_10 = df_sample_10.drop(['Init_Win_bytes_forward', TARGET_COL_CLS], axis=1, errors='ignore')
-    X_reg_10.replace([np.inf, -np.inf], 0, inplace=True) 
+    grafica3_b64 = "" # Vacío
+    regression_data_surface = {} # Vacío
 
-    # 1. Obtener Top 2 Features (usando el modelo cargado)
-    if hasattr(model_reg, 'feature_importances_'):
-        # Temporalmente usamos todas las features de la muestra de 10 para obtener importances
-        all_features = [col for col in X_reg_10.columns if col not in ['min_flowpktl', 'flow_fin']]
-        feature_importances = pd.Series(model_reg.feature_importances_, index=all_features)
-        top_2_features = feature_importances.nlargest(2).index.tolist()
-    else:
-        top_2_features = X_reg_10.columns[:2].tolist()
-    
-    X_reg_top_10 = X_reg_10[top_2_features]
-    
-    # 2. DATOS PARA GRÁFICA 3 (Reales vs Predichos)
-    # Usamos el 80% de la muestra de 10 para "entrenar" y el 20% para "testear" (solo para generar 2 puntos de prueba)
-    X_train_reg, X_test_reg, y_train_reg_transf, y_test_reg_transf = train_test_split(
-        X_reg_top_10, y_reg_transformed_10, test_size=0.2, random_state=42 # 8 filas vs 2 filas
-    )
-    
-    # Aseguramos que la prueba sea la MUESTRA COMPLETA DE 10 FILAS para visualización consistente
-    X_test_reg = X_reg_top_10
-    y_test_reg_transf = y_reg_transformed_10
-    
-    # Predecir para la muestra completa de 10 filas (para la Gráfica 3)
-    y_pred_reg_transf = model_reg.predict(X_test_reg) 
-    
-    # --- GRÁFICA 3: USAMOS .values PARA EVITAR CONFLICTOS DE ÍNDICES ---
-    y_test_array = y_test_reg_transf.values # Longitud 10, sin índices de Pandas
-    
-    fig3, ax3 = plt.subplots(figsize=(10, 8)) 
-    ax3.scatter(y_test_array, y_pred_reg_transf, alpha=0.8, color='#5B21B6', s=100) 
-    
-    # Ajuste de la línea diagonal
-    min_val = min(y_test_array.min(), y_pred_reg_transf.min())
-    max_val = max(y_test_array.max(), y_pred_reg_transf.max())
-    ax3.plot([min_val, max_val], [min_val, max_val], 'r--', lw=2)
-    ax3.set_xlabel("Valores Reales (log transformados)", fontsize=12)
-    ax3.set_ylabel("Valores Predichos (log transformados)", fontsize=12)
-    ax3.set_title("Gráfica 3: Valores reales vs. Predicciones (Log Transformados)", fontsize=14)
-    ax3.grid(True, linestyle='--', alpha=0.6)
-    grafica3_b64 = generar_grafica_base64(fig3)
-
-
-    # 3. DATOS PARA GRÁFICA 2 (Superficie de Predicción)
-    x_min_r, x_max_r = X_reg_top_10.iloc[:, 0].min() - 0.5, X_reg_top_10.iloc[:, 0].max() + 0.5
-    y_min_r, y_max_r = X_reg_top_10.iloc[:, 1].min() - 0.5, X_reg_top_10.iloc[:, 1].max() + 0.5
-    xx_r, yy_r = np.meshgrid(np.linspace(x_min_r, x_max_r, 50), np.linspace(y_min_r, y_max_r, 50))
-    grid_data = pd.DataFrame(np.c_[xx_r.ravel(), yy_r.ravel()], columns=top_2_features)
-    grid_data.replace([np.inf, -np.inf], 0, inplace=True) 
-
-    Z_reg = model_reg.predict(grid_data) 
-
-    # Estructura de salida para el Chart.js
-    regression_data_surface = {
-        'x_feature': top_2_features[0], 'y_feature': top_2_features[1],
-        'x_line': xx_r.flatten().tolist(), 
-        'y_line': yy_r.flatten().tolist(),           
-        'z_line': Z_reg.flatten().tolist(), 
-        'x_data': X_reg_top_10.iloc[:, 0].tolist(), # Longitud 10
-        'y_data': X_reg_top_10.iloc[:, 1].tolist(), # Longitud 10
-        'y_data_class': y_reg_transformed_10.tolist() # Longitud 10 (Valores reales)
-    }
-    
-    # 4. Preparación de Salida Final (Tabla)
+    # 3. Preparación de Salida Final (Tabla de 10 filas)
     df_sample_head = df_sample_10.to_dict('records') 
 
     return {
         'accuracy': f1_rounded, 
         'dataframe': df_sample_head,
         'grafica1_b64': grafica1_b64, 
-        'grafica3_b64': grafica3_b64, 
-        'regressionData': regression_data_surface
+        'grafica3_b64': grafica3_b64, # Vacío
+        'regressionData': regression_data_surface # Vacío
     }
