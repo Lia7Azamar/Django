@@ -1,261 +1,153 @@
+# reentrenar_modelos.py (Ejecutar en tu PC LOCAL)
+
 import pandas as pd
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import f1_score
-from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.svm import SVC
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.svm import SVC # Importar el modelo SVM
+import joblib
 import numpy as np
-import os
-import matplotlib.pyplot as plt
-import io
-import base64
-import matplotlib
-import joblib 
-from django.conf import settings 
 
-# CORRECCIÓN: Usar backend no interactivo para servidores
-matplotlib.use('Agg')
-plt.style.use('default') 
+# --- CONFIGURACIÓN DE RUTAS ---
+CSV_PATH = 'TotalFeatures-ISCXFlowMeter.csv' 
+FEATURES_CLS_ALL = ['duration', 'total_fpackets', 'total_bpktl', 'min_fpktl', 'mean_fiat', 'flowPktsPerSecond', 'min_active', 'mean_active', 'Init_Win_bytes_forward']
+REQUIRED_SVM_FEATURES = ['min_flowpktl', 'flow_fin'] # Necesario para la Gráfica 1
+TARGET_COL_CLS = 'Class' 
+RANDOM_SEED = 42
+N_ROWS_TO_TRAIN = 50000 # Usar un número grande para el entrenamiento
 
-# --- NOMBRES DE ARCHIVOS ---
-MODEL_F1_FILENAME = 'model_f1.joblib'
-MODEL_REG_FILENAME = 'model_reg.joblib'
-MODEL_SVM_FILENAME = 'model_svm.joblib'
-LE_CLAS_FILENAME = 'le_clas.joblib'
-CSV_FILENAME = 'TotalFeatures-ISCXFlowMeter.csv'
-
-# --- RUTAS FINALES: TODAS DENTRO DE LA CARPETA 'analysis' ---
-# Establecemos el directorio base para todos los recursos
-RESOURCES_DIR = os.path.join(settings.BASE_DIR, 'analysis')
-
-CSV_FILE_PATH = os.path.join(RESOURCES_DIR, CSV_FILENAME)
-MODEL_F1_PATH = os.path.join(RESOURCES_DIR, MODEL_F1_FILENAME)
-MODEL_REG_PATH = os.path.join(RESOURCES_DIR, MODEL_REG_FILENAME)
-MODEL_SVM_PATH = os.path.join(RESOURCES_DIR, MODEL_SVM_FILENAME)
-LE_CLAS_PATH = os.path.join(RESOURCES_DIR, LE_CLAS_FILENAME)
-
-
-# --------------------------------------------------------------------
-# *** CARGA GLOBAL DE DATOS Y MODELOS (Optimización de Memoria) ***
-# --------------------------------------------------------------------
-
-# Inicializar variables globales
-GLOBAL_DF = None
-GLOBAL_MODEL_F1 = None
-GLOBAL_MODEL_REG = None
-GLOBAL_MODEL_CLAS = None
-GLOBAL_LE_CLAS = None
-
+# --- 1. CARGA DEL DATASET COMPLETO ---
+print(f"Cargando dataset completo desde: {CSV_PATH}...")
 try:
-    # Carga del DataFrame
-    df_temp = pd.read_csv(CSV_FILE_PATH)
-    
-    # Preprocesamiento inicial
-    df_temp.columns = df_temp.columns.str.strip()
-    df_temp.columns = [col.replace("calss", "Class") for col in df_temp.columns] 
-    for col in df_temp.columns:
-        if col not in ['Class', 'calss']:
-            df_temp[col] = pd.to_numeric(df_temp[col], errors='coerce') 
-    df_temp.replace([np.inf, -np.inf, np.nan], 0, inplace=True)
-    GLOBAL_DF = df_temp
-    
-    # Carga de Modelos
-    GLOBAL_MODEL_F1 = joblib.load(MODEL_F1_PATH)
-    GLOBAL_MODEL_REG = joblib.load(MODEL_REG_PATH)
-    GLOBAL_MODEL_CLAS = joblib.load(MODEL_SVM_PATH)
-    GLOBAL_LE_CLAS = joblib.load(LE_CLAS_PATH)
-    
-    print("Recursos de ML cargados exitosamente de forma global.")
-
+    df_full = pd.read_csv(CSV_PATH)
 except FileNotFoundError:
-    print(f"ERROR FATAL: Archivos de ML no encontrados. Verifique la carpeta: {RESOURCES_DIR}")
-except Exception as e:
-    print(f"ERROR FATAL: Fallo al cargar recursos debido a: {e}")
-    
+    print(f"ERROR FATAL: Archivo no encontrado en la ruta: {CSV_PATH}")
+    exit()
 
-# -------------------------------------------------------------------------
-# FUNCIÓN DE ENTRENAMIENTO Y GUARDADO (EJECUCIÓN LOCAL SOLAMENTE)
-# -------------------------------------------------------------------------
-
-def train_and_save_models(df_safe):
-    """Entrena y guarda los modelos necesarios para la aplicación."""
-    # ... (El código de entrenamiento sigue igual) ...
-    # Nota: Asegúrate de que tu ejecución local también use el path 'analysis' si es necesario.
-    
-    # Ejemplo de guardado:
-    joblib.dump(model_f1, MODEL_F1_FILENAME)
-    print(f"Modelo F1 guardado en {MODEL_F1_FILENAME}")
-    
-    # ... (resto de train_and_save_models) ...
+# Preprocesamiento general:
+df_full.columns = df_full.columns.str.strip()
+df_full.columns = [col.replace("calss", "Class") for col in df_full.columns]
+df_full.replace([np.inf, -np.inf, np.nan], 0, inplace=True)
+print("Carga y preprocesamiento general de datos listos.")
 
 
-# Función auxiliar para convertir gráficas a base64
-def generar_grafica_base64(fig):
-    """Convierte un objeto Matplotlib figure a una cadena base64."""
-    buf = io.BytesIO()
-    fig.savefig(buf, format='png')
-    buf.seek(0)
-    img_b64 = base64.b64encode(buf.read()).decode('utf-8')
-    plt.close(fig)
-    return img_b64
+# --------------------------------------------------------------------------
+# PARTE A: REENTRENAMIENTO DEL MODELO F1 (CLASIFICADOR)
+# --------------------------------------------------------------------------
 
-# -------------------------------------------------------------------------
-# FUNCIÓN DE EJECUCIÓN (USADA POR DJANGO EN RENDER)
-# -------------------------------------------------------------------------
+# Preparación de datos (filtrando a las 2 clases principales)
+class_counts = df_full[TARGET_COL_CLS].value_counts()
+top_2_classes = class_counts.index[:2].tolist()
+df_filtered_cls_f1 = df_full[df_full[TARGET_COL_CLS].isin(top_2_classes)].copy()
 
-def run_malware_analysis():
-    """Usa los modelos y datos cargados globalmente y genera resultados."""
-    
-    # 1. Comprobación de recursos globales
-    if GLOBAL_DF is None or GLOBAL_MODEL_F1 is None:
-        return { 
-            'error': f"ERROR: Recursos de ML no cargados. Verifique que los archivos estén en {RESOURCES_DIR}.", 
-            'accuracy': 0.0, 
-            'dataframe': [] 
-        }
+# Mapeo a binario (0 y 1)
+class_map = {top_2_classes[0]: 0, top_2_classes[1]: 1} 
+df_filtered_cls_f1['target_binary'] = df_filtered_cls_f1[TARGET_COL_CLS].map(class_map)
 
-    # Usar los recursos globales
-    df_safe = GLOBAL_DF.copy()
-    model_f1 = GLOBAL_MODEL_F1
-    model_reg = GLOBAL_MODEL_REG
-    model_clas = GLOBAL_MODEL_CLAS
-    le_clas = GLOBAL_LE_CLAS
+X_f1 = df_filtered_cls_f1[FEATURES_CLS_ALL]
+y_f1 = df_filtered_cls_f1['target_binary']
 
-    # 2. Preprocesamiento de datos (solo de variables globales)
-    target_col_cls = 'Class' if 'Class' in df_safe.columns else 'calss'
-    features_cls_all = ['duration', 'total_fpackets', 'total_bpktl', 'min_fpktl', 'mean_fiat', 'flowPktsPerSecond', 'min_active', 'mean_active', 'Init_Win_bytes_forward']
-    df_sample = df_safe.sample(frac=0.1, random_state=42)
-    class_counts = df_safe[target_col_cls].value_counts()
+# Usar el set de entrenamiento (3/5 partes si separamos 40%)
+X_train_f1, _, y_train_f1, _ = train_test_split(X_f1, y_f1, test_size=0.4, random_state=RANDOM_SEED)
+
+# Escalar los datos de entrenamiento
+scaler_f1 = StandardScaler()
+X_train_f1_scaled = scaler_f1.fit_transform(X_train_f1)
+
+print("\n--- INICIANDO REENTRENAMIENTO CLASIFICADOR (model_f1.joblib) ---")
+
+# ** PARÁMETROS DE REDUCCIÓN DE TAMAÑO DEL MODELO **
+model_f1_small = RandomForestClassifier(
+    n_estimators=30,      # Reducido
+    max_depth=12,         # Limitada
+    min_samples_leaf=5,   # Aumentada
+    random_state=RANDOM_SEED,
+    n_jobs=-1
+)
+
+model_f1_small.fit(X_train_f1_scaled, y_train_f1)
+
+# Guardar el nuevo modelo con MÁXIMA COMPRESIÓN (compress=9)
+joblib.dump(model_f1_small, 'model_f1.joblib', compress=9)
+print("✅ Nuevo modelo 'model_f1.joblib' generado con compresión MÁXIMA.")
 
 
-    # =========================================================================
-    # PARTE A: CLASIFICACIÓN BINARIA (Calculo F1-Score)
-    # =========================================================================
-    top_2_classes = class_counts.index[:2].tolist()
-    df_filtered_cls_f1 = df_safe[df_safe[target_col_cls].isin(top_2_classes)].copy()
-    class_map = {top_2_classes[0]: 0, top_2_classes[1]: 1} 
-    df_filtered_cls_f1['target_binary'] = df_filtered_cls_f1[target_col_cls].map(class_map)
-    y_cls_f1 = df_filtered_cls_f1['target_binary']
-    X_cls_f1 = df_filtered_cls_f1[features_cls_all].copy()
-    X_cls_f1.replace([np.inf, -np.inf], 0, inplace=True)
-    X_train_f1, X_test_f1, y_train_f1, y_test_f1 = train_test_split(X_cls_f1, y_cls_f1, test_size=0.4, random_state=42)
-    
-    # Crear y usar el Scaler
-    scaler_f1 = StandardScaler()
-    scaler_f1.fit(X_train_f1) 
-    X_test_scaled_f1 = scaler_f1.transform(X_test_f1)
-    
-    y_pred_f1 = model_f1.predict(X_test_scaled_f1) 
-    f1 = f1_score(y_test_f1, y_pred_f1, average='binary') 
-    f1_rounded = round(f1, 4)
+# --------------------------------------------------------------------------
+# PARTE B: REENTRENAMIENTO DEL MODELO REGRESOR (model_reg.joblib)
+# --------------------------------------------------------------------------
 
-    # =========================================================================
-    # PARTE B: GRÁFICA 1 - Clasificación SVM
-    # =========================================================================
-    top_3_classes = class_counts.index[:3].tolist()
-    df_filtered_svm = df_sample[df_sample[target_col_cls].isin(top_3_classes)].copy()
-    X_clas_filt = df_filtered_svm[['min_flowpktl', 'flow_fin']].copy()
-    X_clas_filt['min_flowpktl'] = np.log1p(X_clas_filt['min_flowpktl'])
-    X_clas_filt['flow_fin'] = np.log1p(X_clas_filt['flow_fin'])
-    y_clas_encoded = le_clas.transform(df_filtered_svm[target_col_cls]) 
+# Preparación de datos (Regresión: target Init_Win_bytes_forward)
+X_reg = df_full.drop(['Init_Win_bytes_forward', TARGET_COL_CLS], axis=1, errors='ignore')
+y_reg_original = df_full['Init_Win_bytes_forward'].copy()
+y_reg_original[y_reg_original < 0] = 0
+y_reg_transformed = np.log1p(y_reg_original) # Aplicar log transformado
 
-    x_min, x_max = X_clas_filt.iloc[:, 0].min() - 0.1, X_clas_filt.iloc[:, 0].max() + 0.1
-    y_min, y_max = X_clas_filt.iloc[:, 1].min() - 0.1, X_clas_filt.iloc[:, 1].max() + 0.1
-    xx, yy = np.meshgrid(np.linspace(x_min, x_max, 200), np.linspace(y_min, y_max, 200))
-    feature_names = X_clas_filt.columns
-    grid_data_svc = pd.DataFrame(np.c_[xx.ravel(), yy.ravel()], columns=feature_names) 
-    Z = model_clas.predict(grid_data_svc) 
-    Z = Z.reshape(xx.shape)
-    
-    fig1, ax1 = plt.subplots(figsize=(10, 8))
-    ax1.contourf(xx, yy, Z, alpha=0.5, cmap='coolwarm') 
-    class_names_svm = le_clas.classes_
-    for i, class_name in enumerate(class_names_svm):
-        ax1.scatter(X_clas_filt.iloc[y_clas_encoded == i, 0], X_clas_filt.iloc[y_clas_encoded == i, 1],
-                    edgecolors='k', s=60, label=f'Clase: {class_name}', alpha=0.8)
-    ax1.set_title('Gráfica 1: Separabilidad de Datos con SVM (Log Transformación)', fontsize=14)
-    ax1.set_xlabel('Característica: log(1 + min_flowpktl)', fontsize=12) 
-    ax1.set_ylabel('Característica: log(1 + flow_fin)', fontsize=12)
-    ax1.legend(loc='upper right', fontsize=10)
-    ax1.grid(True, linestyle='--', alpha=0.6)
-    grafica1_b64 = generar_grafica_base64(fig1)
+# Usar el set de entrenamiento (70% de los datos)
+X_train_reg, _, y_train_reg_transf, _ = train_test_split(
+    X_reg, y_reg_transformed, test_size=0.3, random_state=RANDOM_SEED
+)
 
-    # =========================================================================
-    # PARTE C: GRÁFICA 2 - Superficie de Predicción 
-    # =========================================================================
-    y_reg_original = df_sample['Init_Win_bytes_forward'].copy()
-    y_reg_original[y_reg_original < 0] = 0
-    y_reg_original.replace([np.inf, -np.inf, np.nan], 0, inplace=True) 
-    y_reg_transformed = np.log1p(y_reg_original)
-    X_reg = df_sample.drop(['Init_Win_bytes_forward', target_col_cls], axis=1, errors='ignore')
-    X_reg.replace([np.inf, -np.inf], 0, inplace=True) 
-    
-    feature_importances = pd.Series(model_reg.feature_importances_, index=X_reg.columns)
-    top_2_features = feature_importances.nlargest(2).index.tolist()
-    if len(top_2_features) < 2:
-        top_2_features = X_reg.columns[:2].tolist()
+print("\n--- INICIANDO REENTRENAMIENTO REGRESOR (model_reg.joblib) ---")
 
-    X_reg_top = X_reg[top_2_features]
-    X_reg_top.replace([np.inf, -np.inf], 0, inplace=True)
-    
-    X_train_reg, X_test_reg, y_train_reg_transf, y_test_reg_transf = train_test_split(
-        X_reg_top, y_reg_transformed, test_size=0.3, random_state=42
-    )
+# ** PARÁMETROS DE REDUCCIÓN DE TAMAÑO DEL MODELO **
+model_reg_small = RandomForestRegressor(
+    n_estimators=30,      # Reducido
+    max_depth=12,         # Limitada
+    min_samples_leaf=5,
+    random_state=RANDOM_SEED,
+    n_jobs=-1
+)
 
-    x_min_r, x_max_r = X_reg_top.iloc[:, 0].min() - 0.5, X_reg_top.iloc[:, 0].max() + 0.5
-    y_min_r, y_max_r = X_reg_top.iloc[:, 1].min() - 0.5, X_reg_top.iloc[:, 1].max() + 0.5
-    xx_r, yy_r = np.meshgrid(np.linspace(x_min_r, x_max_r, 50), np.linspace(y_min_r, y_max_r, 50))
-    grid_data = pd.DataFrame(np.c_[xx_r.ravel(), yy_r.ravel()], columns=top_2_features)
-    grid_data.replace([np.inf, -np.inf], 0, inplace=True) 
+model_reg_small.fit(X_train_reg, y_train_reg_transf)
 
-    Z_reg = model_reg.predict(grid_data) 
+# Guardar el nuevo modelo con MÁXIMA COMPRESIÓN (compress=9)
+joblib.dump(model_reg_small, 'model_reg.joblib', compress=9)
+print("✅ Nuevo modelo 'model_reg.joblib' generado con compresión MÁXIMA.")
 
-    regression_data_surface = {
-        'x_feature': top_2_features[0], 'y_feature': top_2_features[1],
-        'x_line': xx_r.flatten().tolist(), 'y_line': yy_r.flatten().tolist(),           
-        'z_line': Z_reg.flatten().tolist(), 'x_data': X_reg_top.iloc[:, 0].tolist(), 
-        'y_data': X_reg_top.iloc[:, 1].tolist(), 'y_data_class': y_reg_transformed.tolist()
-    }
-    
-    # =========================================================================
-    # PARTE D: GRÁFICA 3 - Reales vs Predichos
-    # =========================================================================
-    y_pred_reg_transf = model_reg.predict(X_test_reg)
-    
-    fig3, ax3 = plt.subplots(figsize=(10, 8))
-    ax3.scatter(y_test_reg_transf, y_pred_reg_transf, alpha=0.6, color='#5B21B6') 
-    min_val = min(y_test_reg_transf.min(), y_pred_reg_transf.min())
-    max_val = max(y_test_reg_transf.max(), y_pred_reg_transf.max())
-    ax3.plot([min_val, max_val], [min_val, max_val], 'r--', lw=2)
-    ax3.set_xlabel("Valores Reales (log transformados)", fontsize=12)
-    ax3.set_ylabel("Valores Predichos (log transformados)", fontsize=12)
-    ax3.set_title("Gráfica 3: Valores reales vs. Predicciones (Log Transformados)", fontsize=14)
-    ax3.grid(True, linestyle='--', alpha=0.6)
-    grafica3_b64 = generar_grafica_base64(fig3)
 
-    # 3. Preparación de Salida Final
-    df_sample_head = df_safe.head(10).to_dict('records') 
+# --------------------------------------------------------------------------
+# PARTE C: REENTRENAMIENTO DEL MODELO SVM y LABEL ENCODER (para Gráfica 1)
+# --------------------------------------------------------------------------
 
-    return {
-        'accuracy': f1_rounded, 
-        'dataframe': df_sample_head,
-        'grafica1_b64': grafica1_b64, 
-        'grafica3_b64': grafica3_b64, 
-        'regressionData': regression_data_surface
-    }
+# Preparación de datos (filtrando a las 3 clases principales para SVM)
+top_3_classes = class_counts.index[:3].tolist()
+df_filtered_svm = df_full[df_full[TARGET_COL_CLS].isin(top_3_classes)].copy()
+X_svm = df_filtered_svm[REQUIRED_SVM_FEATURES].copy()
+y_svm = df_filtered_svm[TARGET_COL_CLS]
 
-# Si ejecutas este archivo directamente, entrenas y guardas los modelos
-if __name__ == '__main__':
-    # Carga de Datos inicial para el entrenamiento local
-    file_path = CSV_FILENAME # Path local, asume que se ejecuta desde la raíz o dentro de analysis
-    df = pd.read_csv(file_path)
-    df.columns = df.columns.str.strip()
-    df.columns = [col.replace("calss", "Class") for col in df.columns] 
-    df_safe = df.copy()
-    
-    for col in df_safe.columns:
-        if col != 'Class' and col != 'calss':
-            df_safe[col] = pd.to_numeric(df_safe[col], errors='coerce') 
-    df_safe.replace([np.inf, -np.inf, np.nan], 0, inplace=True)
-    
-    train_and_save_models(df_safe)
+# 1. Entrenar y guardar el LabelEncoder (CRÍTICO para el análisis)
+le_clas = LabelEncoder()
+y_svm_encoded = le_clas.fit_transform(y_svm)
+joblib.dump(le_clas, 'le_clas.joblib', compress=9)
+print("✅ 'le_clas.joblib' (LabelEncoder) generado.")
+
+# 2. Preprocesamiento de datos para SVM (Log Transformación, como en el análisis)
+X_svm_transf = X_svm.copy()
+X_svm_transf['min_flowpktl'] = np.log1p(X_svm_transf['min_flowpktl'])
+X_svm_transf['flow_fin'] = np.log1p(X_svm_transf['flow_fin'])
+
+# ** PARÁMETROS DE REDUCCIÓN DE TAMAÑO DEL MODELO SVM **
+# Reducir el tamaño de entrenamiento para que el modelo sea más pequeño
+X_svm_train, _, y_svm_train, _ = train_test_split(
+    X_svm_transf, y_svm_encoded, test_size=0.95, random_state=RANDOM_SEED
+) # Usamos solo el 5% para que el modelo sea PEQUEÑO
+
+print(f"\n--- INICIANDO REENTRENAMIENTO SVM (model_svm.joblib) con {len(X_svm_train)} muestras ---")
+
+model_svm_small = SVC(
+    kernel='rbf',       
+    C=1.0,              # Regularización baja
+    gamma='scale',
+    random_state=RANDOM_SEED,
+)
+
+model_svm_small.fit(X_svm_train, y_svm_train)
+
+# Guardar el nuevo modelo con MÁXIMA COMPRESIÓN (compress=9)
+joblib.dump(model_svm_small, 'model_svm.joblib', compress=9)
+print("✅ Nuevo modelo 'model_svm.joblib' generado con compresión MÁXIMA.")
+
+print("\nProceso de generación de modelos SMALL y COMPRIMIDOS completado.")
+print("\nPASOS A SEGUIR:")
+print("1. Sube los 4 archivos .joblib generados a tu repositorio de Hugging Face.")
+print("2. Despliega la última versión de analysis_script.py en Railway.")
