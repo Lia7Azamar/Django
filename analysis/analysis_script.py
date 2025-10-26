@@ -29,9 +29,9 @@ LE_CLAS_FILENAME = 'le_clas.joblib'
 CSV_FILENAME = 'TotalFeatures-ISCXFlowMeter.csv'
 
 # Columnas mínimas necesarias
-# 🚨 CORRECCIÓN FINAL: Usamos 'Class' aquí para evitar el KeyError
+# 🚨 VOLVEMOS A 'calss' para que Pandas pueda leer el CSV original
 COLUMNS_NEEDED_FOR_ML = [
-    'Class', 
+    'calss', 
     'duration', 'total_fpackets', 'total_bpktl', 
     'min_fpktl', 'mean_fiat', 'flowPktsPerSecond', 'min_active', 
     'mean_active', 'Init_Win_bytes_forward', 'min_flowpktl', 'flow_fin'
@@ -113,8 +113,12 @@ try:
     
     # Preprocesamiento inicial
     df_temp.columns = df_temp.columns.str.strip()
-    target_col_name = 'Class' # Nombre de la columna target
     
+    # 🚨 CORRECCIÓN CRÍTICA: Renombramos 'calss' a 'Class' inmediatamente después de la carga
+    df_temp.rename(columns={'calss': 'Class'}, inplace=True)
+    
+    target_col_name = 'Class' 
+
     # Conversión y manejo de NaNs/Infinitos
     for col in df_temp.columns:
         if col != target_col_name:
