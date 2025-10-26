@@ -51,8 +51,6 @@ def optimize_dataframe_memory(df):
             c_min = df[col].min()
             c_max = df[col].max()
             
-            # (Lógica de optimización de tipos omitida para brevedad, asumiendo que ya está en tu script)
-            # Solo la copiamos para mantener la estructura:
             if str(df[col].dtype)[:3] == 'int':
                 if c_min > np.iinfo(np.int8).min and c_max < np.iinfo(np.int8).max:
                     df[col] = df[col].astype(np.int8)
@@ -164,18 +162,19 @@ def run_malware_analysis():
         }
 
     # Usar los recursos globales
-    df_safe = GLOBAL_DF.copy()
+    df_safe = GLOBAL_DF.copy() # Usaremos df_safe (las 50k filas) directamente
     model_f1 = GLOBAL_MODEL_F1
     model_reg = GLOBAL_MODEL_REG
     model_clas = GLOBAL_MODEL_CLAS
     le_clas = GLOBAL_LE_CLAS
 
-    # 2. Preprocesamiento de datos (solo de variables globales)
+    # 2. Preprocesamiento de datos 
     target_col_cls = 'Class' 
     features_cls_all = ['duration', 'total_fpackets', 'total_bpktl', 'min_fpktl', 'mean_fiat', 'flowPktsPerSecond', 'min_active', 'mean_active', 'Init_Win_bytes_forward']
     
-    # Muestreo al 10% de las filas cargadas
-    df_sample = df_safe.sample(frac=0.1, random_state=42)
+    # *** CAMBIO CLAVE: ELIMINAR df_sample, usar df_safe (50k filas) ***
+    # df_sample = df_safe.sample(frac=0.1, random_state=42) # LINEA ELIMINADA
+    
     class_counts = df_safe[target_col_cls].value_counts()
     f1_rounded = 0.0 
     
@@ -227,11 +226,13 @@ def run_malware_analysis():
     
     required_svm_features = ['min_flowpktl', 'flow_fin']
     
-    if not all(f in df_safe.columns for f in required_svm_features) or len(class_counts) < 3:
+    # CAMBIO: Usamos len(class_counts) < 2 para evitar errores de indexación de LabelEncoder
+    if not all(f in df_safe.columns for f in required_svm_features) or len(class_counts) < 2:
         print("ADVERTENCIA: Saltando Gráfica 1 (SVM) por insuficiencia de datos/clases/columnas.")
     else:
         top_3_classes = class_counts.index[:3].tolist()
-        df_filtered_svm = df_sample[df_sample[target_col_cls].isin(top_3_classes)].copy()
+        # CAMBIO: Usamos df_safe en lugar de df_sample
+        df_filtered_svm = df_safe[df_safe[target_col_cls].isin(top_3_classes)].copy()
         X_clas_filt = df_filtered_svm[required_svm_features].copy()
         
         X_clas_filt['min_flowpktl'] = np.log1p(X_clas_filt['min_flowpktl'])
@@ -245,7 +246,7 @@ def run_malware_analysis():
              x_min, x_max = X_clas_filt.iloc[:, 0].min() - 0.1, X_clas_filt.iloc[:, 0].max() + 0.1
              y_min, y_max = X_clas_filt.iloc[:, 1].min() - 0.1, X_clas_filt.iloc[:, 1].max() + 0.1
              
-             # ULTIMA CORRECCIÓN: Reducción de la malla de predicción a 20x20
+             # Malla de 20x20
              xx, yy = np.meshgrid(np.linspace(x_min, x_max, 20), np.linspace(y_min, y_max, 20)) 
              
              feature_names = X_clas_filt.columns
@@ -272,11 +273,14 @@ def run_malware_analysis():
     # PARTES C & D: REGRESIÓN (Gráficas 2 y 3)
     # =========================================================================
     
-    y_reg_original = df_sample['Init_Win_bytes_forward'].copy()
+    # CAMBIO: Usamos df_safe en lugar de df_sample
+    y_reg_original = df_safe['Init_Win_bytes_forward'].copy()
     y_reg_original[y_reg_original < 0] = 0
     y_reg_original.replace([np.inf, -np.inf, np.nan], 0, inplace=True) 
     y_reg_transformed = np.log1p(y_reg_original)
-    X_reg = df_sample.drop(['Init_Win_bytes_forward', target_col_cls], axis=1, errors='ignore')
+    
+    # CAMBIO: Usamos df_safe en lugar de df_sample
+    X_reg = df_safe.drop(['Init_Win_bytes_forward', target_col_cls], axis=1, errors='ignore')
     X_reg.replace([np.inf, -np.inf], 0, inplace=True) 
     
     if len(X_reg.columns) < 2:
@@ -302,7 +306,7 @@ def run_malware_analysis():
         x_min_r, x_max_r = X_reg_top.iloc[:, 0].min() - 0.5, X_reg_top.iloc[:, 0].max() + 0.5
         y_min_r, y_max_r = X_reg_top.iloc[:, 1].min() - 0.5, X_reg_top.iloc[:, 1].max() + 0.5
         
-        # ULTIMA CORRECCIÓN: Reducción de la malla de predicción a 5x5
+        # Malla de 5x5
         xx_r, yy_r = np.meshgrid(np.linspace(x_min_r, x_max_r, 5), np.linspace(y_min_r, y_max_r, 5))
         
         grid_data = pd.DataFrame(np.c_[xx_r.ravel(), yy_r.ravel()], columns=top_2_features)
