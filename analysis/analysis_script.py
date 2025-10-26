@@ -197969,7 +197969,10 @@ def run_malware_analysis():
         'dataframe': STATIC_DATAFRAME_HEAD,
         'grafica1_b64': STATIC_GRAFICA_1_B64, 
         'grafica3_b64': STATIC_GRAFICA_3_B64, 
-        'regressionData': STATIC_REGRESSION_DATA_SURFACE
+        'regressionData': STATIC_REGRESSION_DATA_SURFACE,
+        
+        # 🟢 NUEVA CLAVE DE ESTADO
+        'status_message': '✅ Datos de análisis cargados completamente.'
     }
 
 def load_global_resources():
