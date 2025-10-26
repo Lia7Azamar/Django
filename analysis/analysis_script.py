@@ -1,7 +1,7 @@
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import f1_score
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, LabelEncoder
 import numpy as np
 import os
 import matplotlib.pyplot as plt
@@ -9,25 +9,19 @@ import io
 import base64
 import matplotlib
 import joblib 
-# Importar la librería necesaria para Hugging Face
 from huggingface_hub import hf_hub_download 
 from django.conf import settings 
-# Importar el LabelEncoder que ya no se importa desde sklearn.preprocessing
-from sklearn.preprocessing import LabelEncoder # Se mantiene la importación necesaria
 
-# CORRECCIÓN: Usar backend no interactivo para servidores
+# Usar backend no interactivo para servidores
 matplotlib.use('Agg')
 plt.style.use('default') 
 
 # --- CONFIGURACIÓN DE HUGGING FACE ---
 HF_REPO_ID = "Lia896gh/csv" 
-HF_REPO_TYPE = "dataset" # Tipo de repositorio (dataset, no model)
-
-# Si los archivos estuvieran en una subcarpeta, se ajusta aquí.
-# Por defecto, se asume que están en la raíz del repo 'csv'.
+HF_REPO_TYPE = "dataset" 
 HF_SUBFOLDER = "" 
 
-# --- NOMBRES Y RUTAS DE ARCHIVOS EN EL REPOSITORIO DE HF ---
+# --- NOMBRES DE ARCHIVOS EN EL REPOSITORIO DE HF ---
 MODEL_F1_FILENAME = 'model_f1.joblib'
 MODEL_REG_FILENAME = 'model_reg.joblib'
 MODEL_SVM_FILENAME = 'model_svm.joblib'
@@ -41,7 +35,7 @@ COLUMNS_NEEDED_FOR_ML = [
     'mean_active', 'Init_Win_bytes_forward', 'min_flowpktl', 'flow_fin'
 ]
 
-# Directorio de caché temporal para los archivos descargados
+# Directorio de caché temporal
 RESOURCES_DIR = os.path.join(settings.BASE_DIR, 'hf_cache')
 os.makedirs(RESOURCES_DIR, exist_ok=True)
 
@@ -85,11 +79,9 @@ RESOURCES_LOADED = False
 
 # Función auxiliar para descargar un archivo de Hugging Face
 def download_hf_file(filename):
-    # Combina la posible subcarpeta con el nombre del archivo
     file_path_in_repo = os.path.join(HF_SUBFOLDER, filename)
     print(f"Descargando {file_path_in_repo} de Hugging Face (ID: {HF_REPO_ID}, Tipo: {HF_REPO_TYPE})...")
     
-    # Se añade allow_patterns para evitar descargas no deseadas si el repositorio es muy grande
     return hf_hub_download(
         repo_id=HF_REPO_ID, 
         filename=file_path_in_repo,
@@ -101,15 +93,15 @@ try:
     # 1. DESCARGA A CACHÉ
     print(f"Iniciando descarga y lectura optimizada desde Hugging Face: {HF_REPO_ID}")
     
-    # 1a. Descargar todos los archivos a la caché local primero
+    # Descargar todos los archivos
     CSV_FILE_PATH = download_hf_file(CSV_FILENAME)
     MODEL_F1_PATH = download_hf_file(MODEL_F1_FILENAME)
     MODEL_REG_PATH = download_hf_file(MODEL_REG_FILENAME)
     MODEL_SVM_PATH = download_hf_file(MODEL_SVM_FILENAME)
     LE_CLAS_PATH = download_hf_file(LE_CLAS_FILENAME)
 
-    # 1b. Cargar CSV con optimización (Aumentar el límite de filas para capturar más clases)
-    N_ROWS_TO_LOAD = 50000  # <--- ¡CORRECCIÓN CRÍTICA DE 10000 A 50000!
+    # 1b. Cargar CSV con optimización (Aumento de filas CRÍTICO)
+    N_ROWS_TO_LOAD = 50000  # <--- CORRECCIÓN CRÍTICA: 50,000 filas
     
     print(f"Leyendo las primeras {N_ROWS_TO_LOAD} filas y columnas específicas del CSV descargado.")
 
@@ -121,11 +113,10 @@ try:
     
     # Preprocesamiento inicial
     df_temp.columns = df_temp.columns.str.strip()
-    # Estandarizar nombre de la columna objetivo
     df_temp.columns = [col.replace("calss", "Class") for col in df_temp.columns] 
     target_col_name = 'Class' 
 
-    # Convertir a numérico y manejar infinitos/NaNs
+    # Conversión y manejo de NaNs/Infinitos
     for col in df_temp.columns:
         if col != target_col_name:
             df_temp[col] = pd.to_numeric(df_temp[col], errors='coerce') 
@@ -134,7 +125,7 @@ try:
     df_temp = optimize_dataframe_memory(df_temp)
     GLOBAL_DF = df_temp
     
-    # 1c. Cargar Modelos (desde la caché local)
+    # 1c. Cargar Modelos 
     GLOBAL_MODEL_F1 = joblib.load(MODEL_F1_PATH)
     GLOBAL_MODEL_REG = joblib.load(MODEL_REG_PATH)
     GLOBAL_MODEL_CLAS = joblib.load(MODEL_SVM_PATH)
@@ -144,7 +135,6 @@ try:
     print("Recursos de ML cargados exitosamente desde Hugging Face y optimizados.")
 
 except Exception as e:
-    # Este catch es robusto y reportará cualquier error de conexión, FileNotFoundError, o ValueError
     print(f"ERROR FATAL: Fallo al cargar recursos (Timeout/Memoria/Ruta de Archivo) debido a: {e}")
     
 
@@ -189,16 +179,15 @@ def run_malware_analysis():
     class_counts = df_safe[target_col_cls].value_counts()
     f1_rounded = 0.0 
     
-    # Inicializar las variables de salida en caso de que las secciones se salten
+    # Inicializar variables de salida
     grafica1_b64 = None
     grafica3_b64 = None
     regression_data_surface = {}
     
     # =========================================================================
-    # PARTE A: CLASIFICACIÓN BINARIA (Calculo F1-Score) - A PRUEBA DE FALLOS DE CLASES
+    # PARTE A: CLASIFICACIÓN BINARIA (Calculo F1-Score)
     # =========================================================================
     
-    # CRÍTICO: Comprobación de que hay al menos 2 clases
     if len(class_counts) < 2:
         return { 
             'error': f"Error ML: La muestra cargada ({len(df_safe)} filas) solo tiene {len(class_counts)} clases únicas. Se requieren al menos 2 para F1.", 
@@ -238,7 +227,6 @@ def run_malware_analysis():
     
     required_svm_features = ['min_flowpktl', 'flow_fin']
     
-    # Comprobación de que hay al menos 3 clases para la gráfica de SVM
     if not all(f in df_safe.columns for f in required_svm_features) or len(class_counts) < 3:
         print("ADVERTENCIA: Saltando Gráfica 1 (SVM) por insuficiencia de datos/clases/columnas.")
     else:
@@ -246,19 +234,20 @@ def run_malware_analysis():
         df_filtered_svm = df_sample[df_sample[target_col_cls].isin(top_3_classes)].copy()
         X_clas_filt = df_filtered_svm[required_svm_features].copy()
         
-        # Transformación de características (requerida por el modelo)
         X_clas_filt['min_flowpktl'] = np.log1p(X_clas_filt['min_flowpktl'])
         X_clas_filt['flow_fin'] = np.log1p(X_clas_filt['flow_fin'])
         
         try:
-             # Se usa le_clas cargado del .joblib
              y_clas_encoded = le_clas.transform(df_filtered_svm[target_col_cls]) 
         except ValueError:
              print("ADVERTENCIA: Saltando Gráfica 1, LabelEncoder no reconoce las clases en la muestra.")
         else:
              x_min, x_max = X_clas_filt.iloc[:, 0].min() - 0.1, X_clas_filt.iloc[:, 0].max() + 0.1
              y_min, y_max = X_clas_filt.iloc[:, 1].min() - 0.1, X_clas_filt.iloc[:, 1].max() + 0.1
-             xx, yy = np.meshgrid(np.linspace(x_min, x_max, 200), np.linspace(y_min, y_max, 200))
+             
+             # CORRECCIÓN CRÍTICA: Reducción de la malla de predicción a 50x50
+             xx, yy = np.meshgrid(np.linspace(x_min, x_max, 50), np.linspace(y_min, y_max, 50)) 
+             
              feature_names = X_clas_filt.columns
              grid_data_svc = pd.DataFrame(np.c_[xx.ravel(), yy.ravel()], columns=feature_names) 
              grid_data_svc.replace([np.inf, -np.inf, np.nan], 0, inplace=True) 
@@ -293,14 +282,13 @@ def run_malware_analysis():
     if len(X_reg.columns) < 2:
         print("ADVERTENCIA: Saltando Gráfica 2 y 3, no hay suficientes columnas para X_reg.")
     else:
-        # Se verifica la disponibilidad de feature_importances
+        # Usar feature importances o las primeras 2
         if hasattr(model_reg, 'feature_importances_'):
             feature_importances = pd.Series(model_reg.feature_importances_, index=X_reg.columns)
             top_2_features = feature_importances.nlargest(2).index.tolist()
         else:
-             # Si no hay feature_importances, usar las primeras 2 columnas
             top_2_features = X_reg.columns[:2].tolist()
-
+        
         if len(top_2_features) < 2:
             top_2_features = X_reg.columns[:2].tolist()
 
@@ -313,7 +301,10 @@ def run_malware_analysis():
         
         x_min_r, x_max_r = X_reg_top.iloc[:, 0].min() - 0.5, X_reg_top.iloc[:, 0].max() + 0.5
         y_min_r, y_max_r = X_reg_top.iloc[:, 1].min() - 0.5, X_reg_top.iloc[:, 1].max() + 0.5
-        xx_r, yy_r = np.meshgrid(np.linspace(x_min_r, x_max_r, 50), np.linspace(y_min_r, y_max_r, 50))
+        
+        # CORRECCIÓN CRÍTICA: Reducción de la malla de predicción a 20x20
+        xx_r, yy_r = np.meshgrid(np.linspace(x_min_r, x_max_r, 20), np.linspace(y_min_r, y_max_r, 20))
+        
         grid_data = pd.DataFrame(np.c_[xx_r.ravel(), yy_r.ravel()], columns=top_2_features)
         grid_data.replace([np.inf, -np.inf], 0, inplace=True) 
 
